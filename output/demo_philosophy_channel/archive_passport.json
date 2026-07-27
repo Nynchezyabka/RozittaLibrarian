@@ -1,0 +1,24 @@
+{
+  "title": "Философия буднего дня",
+  "chat_id": -1001234567890,
+  "chat_type": "channel",
+  "username": "@philosophy_daily",
+  "date_from": "2024-09-15T10:30:00",
+  "date_to": "2024-10-01T09:15:00",
+  "messages_count": 6,
+  "transcriptions_count": 1,
+  "shelves": [
+    {
+      "kind": "messages",
+      "label": "Сообщения",
+      "count": 6
+    },
+    {
+      "kind": "transcriptions",
+      "label": "Транскрипции",
+      "count": 1
+    }
+  ],
+  "parser_version": "1.7.3",
+  "exported_at": "2026-07-27T11:17:33.995705+00:00"
+}

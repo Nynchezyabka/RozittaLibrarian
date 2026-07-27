@@ -1,0 +1,275 @@
+"""
+main.py — точка входа Rozitta Librarian.
+
+FastAPI + одна страница + WebSocket, порт 8011. Скелет как у RozittaTranscriber.
+
+Маршруты:
+    GET  /                       → index.html
+    GET  /api/archives           → список найденных архивов
+    POST /api/archives/{id}/open → открыть архив + построить индекс
+    GET  /api/archives/{id}/shelves → list_shelves()
+    GET  /api/archives/{id}/stats  → stats()
+    WS   /ws                     → оркестратор:
+        in:  {"op": "search"|"read_post"|"whats_new"|"stats"|"list_shelves",
+              "archive_id": "...", "args": {...}}
+        out: поток сообщений с live-логом шагов и финальным ответом
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Any, Optional
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from core import LibrarianCore
+from core.tools import ToolError
+
+
+# ---------------------------------------------------------------------------
+# App setup
+# ---------------------------------------------------------------------------
+
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+OUTPUT_ROOT = BASE_DIR / "output"
+# Порт по спеке — 8011. Можно переопределить через окружение LIBRARIAN_PORT,
+# если 8011 уже занят (например, другой копией Librarian в этом же контейнере).
+PORT = int(os.environ.get("LIBRARIAN_PORT", "8011"))
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+log = logging.getLogger("librarian")
+
+app = FastAPI(title="Rozitta Librarian", version="0.1.0-stage1")
+core = LibrarianCore(OUTPUT_ROOT)
+
+# Static files (favicon, etc.) — но index.html отдаём вручную, чтобы
+# добавить no-cache и убедиться, что корень — это всегда свежий UI.
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+# ---------------------------------------------------------------------------
+# HTTP routes
+# ---------------------------------------------------------------------------
+
+@app.get("/")
+async def index():
+    return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
+
+
+@app.get("/api/health")
+async def health():
+    return {
+        "status": "ok",
+        "service": "rozitta_librarian",
+        "port": PORT,
+        "stage": "1-reading-hall",
+        "archives_found": len(core.list_archives()),
+    }
+
+
+@app.get("/api/archives")
+async def api_list_archives():
+    """Список архивов в output/. Не открывает базы."""
+    return {"archives": core.list_archives_as_dict()}
+
+
+@app.post("/api/archives/{archive_id}/open")
+async def api_open_archive(archive_id: str):
+    try:
+        archive = core.open_archive(archive_id)
+        return archive.to_dict()
+    except Exception as e:
+        log.exception("open_archive failed")
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@app.post("/api/archives/{archive_id}/reindex")
+async def api_reindex(archive_id: str):
+    try:
+        stats = core.ensure_index(archive_id, force=True)
+        return {"archive_id": archive_id, "reindex": stats}
+    except Exception as e:
+        log.exception("reindex failed")
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@app.get("/api/archives/{archive_id}/shelves")
+async def api_shelves(archive_id: str):
+    try:
+        return core.list_shelves(archive_id)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@app.get("/api/archives/{archive_id}/stats")
+async def api_stats(archive_id: str, kind: str = "overview", top_authors: int = 20):
+    try:
+        return core.stats(archive_id, kind=kind, top_authors=top_authors)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+# ---------------------------------------------------------------------------
+# WebSocket orchestrator
+# ---------------------------------------------------------------------------
+
+async def _ws_send(ws: WebSocket, type_: str, **payload) -> None:
+    """Безопасная отправка JSON-фрейма в вебсокет."""
+    try:
+        await ws.send_json({"type": type_, **payload})
+    except Exception:
+        log.debug("ws send failed", exc_info=True)
+
+
+async def _ws_log(ws: WebSocket, message: str, level: str = "info") -> None:
+    """Live-лог шага — показывается в правой колонке UI."""
+    await _ws_send(ws, "log", level=level, message=message)
+
+
+@app.websocket("/ws")
+async def ws_main(ws: WebSocket):
+    """
+    Финальная версия. _handle_op — корутина, и WebSocket-сообщения уходят
+    в основном event loop; долгие SQL-операции уходят в threadpool через
+    asyncio.to_thread внутри самой корутины (см. ниже).
+    """
+    await ws.accept()
+    await _ws_send(ws, "hello", message="Rozitta Librarian готов к работе", port=PORT)
+    log.info("WS connected")
+    try:
+        while True:
+            raw = await ws.receive_text()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                await _ws_send(ws, "error", message="Ожидался JSON")
+                continue
+
+            op = msg.get("op")
+            archive_id = msg.get("archive_id", "")
+            args = msg.get("args", {}) or {}
+
+            if not op:
+                await _ws_send(ws, "error", message="Нет поля op")
+                continue
+
+            try:
+                result = await _handle_op_sync(ws, op, archive_id, args)
+            except ToolError as e:
+                await _ws_send(ws, "error", message=str(e))
+                continue
+            except Exception as e:
+                log.exception("op failed: %s", op)
+                await _ws_send(ws, "error", message=f"Внутренняя ошибка: {e}")
+                continue
+
+            if result is not None:
+                await _ws_send(ws, "result", op=op, archive_id=archive_id, data=result)
+    except WebSocketDisconnect:
+        log.info("WS disconnected")
+    except Exception:
+        log.exception("WS error")
+
+
+async def _handle_op_sync(ws: WebSocket, op: str, archive_id: str, args: dict) -> Optional[dict]:
+    """
+    Синхронная обёртка вокруг логики операций. Долгие SQL-запросы уходят в
+    threadpool через asyncio.to_thread, чтобы event loop не блокировался
+    и ws.send_json мог отправлять live-логи параллельно.
+    """
+    args = args or {}
+
+    if op == "list_archives":
+        await _ws_log(ws, "Сканирую папку output/ …")
+        archives = await asyncio.to_thread(core.list_archives_as_dict)
+        await _ws_log(ws, f"Найдено архивов: {len(archives)}",
+                      level="success" if archives else "warning")
+        return {"archives": archives}
+
+    if op == "open_archive":
+        await _ws_log(ws, f"Открываю архив «{archive_id}» …")
+        try:
+            archive = await asyncio.to_thread(core.open_archive, archive_id)
+        except Exception as e:
+            await _ws_log(ws, f"Не удалось открыть: {e}", level="error")
+            raise
+        await _ws_log(ws, f"Архив открыт: {archive.passport.title}", level="success")
+        return archive.to_dict()
+
+    if op == "search":
+        query = (args.get("query") or "").strip()
+        if not query:
+            await _ws_send(ws, "error", message="Пустой поисковый запрос")
+            return None
+        await _ws_log(ws, f"Ищу: «{query}» …")
+        kwargs = {k: v for k, v in args.items() if k != "query"}
+        result = await asyncio.to_thread(core.search, archive_id, query, **kwargs)
+        await _ws_log(
+            ws,
+            f"Найдено: {result['count']} (лимит 20)",
+            level="success" if result["count"] > 0 else "warning",
+        )
+        return result
+
+    if op == "read_post":
+        chat_id = args.get("chat_id")
+        message_id = args.get("message_id")
+        if chat_id is None or message_id is None:
+            await _ws_send(ws, "error", message="Нужны chat_id и message_id")
+            return None
+        await _ws_log(ws, f"Читаю пост {chat_id}/{message_id} …")
+        result = await asyncio.to_thread(
+            core.read_post, archive_id,
+            chat_id=int(chat_id), message_id=int(message_id),
+            comment_limit=args.get("comment_limit", 200),
+            comment_offset=args.get("comment_offset", 0),
+        )
+        c = result["comments"]["total"]
+        await _ws_log(
+            ws,
+            f"Пост от {result['post']['author']} · комментариев: {c}",
+            level="success",
+        )
+        return result
+
+    if op == "stats":
+        await _ws_log(ws, "Собираю статистику …")
+        return await asyncio.to_thread(core.stats, archive_id, **args)
+
+    if op == "whats_new":
+        await _ws_log(ws, "Что нового …")
+        return await asyncio.to_thread(core.whats_new, archive_id, **args)
+
+    if op == "list_shelves":
+        await _ws_log(ws, "Полки архива …")
+        return await asyncio.to_thread(core.list_shelves, archive_id)
+
+    await _ws_send(ws, "error", message=f"Неизвестная операция: {op}")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import uvicorn
+    print(f"\n  Rozitta Librarian — порт {PORT}")
+    print(f"  output root: {OUTPUT_ROOT}")
+    print(f"  http://localhost:{PORT}\n")
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=PORT,
+        reload=False,
+        log_level="info",
+    )

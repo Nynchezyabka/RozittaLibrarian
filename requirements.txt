@@ -1,0 +1,9 @@
+# Rozitta Librarian — зависимости
+# Каркас: FastAPI + WebSocket на порту 8011 (как у RozittaTranscriber)
+fastapi>=0.110
+uvicorn[standard]>=0.27
+websockets>=12.0
+# БД — стандартный sqlite3 из Python, FTS5 встроен
+# (никаких внешних ORM — deliberate, см. librarian_рабочий_план.md §2)
+# Тесты
+pytest>=8.0
