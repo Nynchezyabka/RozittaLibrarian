@@ -1,21 +1,26 @@
 # Rozitta Librarian — Этап 1 «Читальный зал»
 
-Поиск и чтение архивов Telegram, скачанных [Rozitta Parser](https://github.com/Nynchezyabka/RozittaLibrarian).
-Скелет как у RozittaTranscriber: **FastAPI + одна HTML-страница + WebSocket, порт 8011**.
+Поиск и чтение архивов Telegram, скачанных
+[Rozitta Parser](https://github.com/Nynchezyabka/RozittaLibrarian).
+Скелет как у RozittaTranscriber: **FastAPI + одна HTML-страница + WebSocket,
+порт 8011**. Без единой настройки модели — уже полезна как быстрый
+FTS-поиск по архиву.
 
 ## Что внутри
 
 | Компонент | Файл | Назначение |
 |---|---|---|
-| Точка входа | `main.py` | FastAPI + WebSocket :8011, HTTP API |
-| Discovery | `core/archive.py` | Поиск архивов в `output/`, чтение `archive_passport.json` |
-| Parser DB | `core/parser_db.py` | Read-only (`mode=ro`) доступ к `parser.db`, проверка `PRAGMA user_version` |
-| Librarian DB | `core/librarian_db.py` | Своя `librarian.db`, FTS5-индекс над `messages.text` + `transcriptions.text` |
-| Инструменты | `core/tools.py` | 5 инструментов: `search`, `read_post`, `stats`, `whats_new`, `list_shelves` |
+| Точка входа | `main.py` | FastAPI + WebSocket :8011, HTTP API, авто-открытие браузера |
+| Discovery | `core/archive.py` | Поиск архивов в `output/`, чтение `archive_passport.json`, динамические чипы через `top_terms` |
+| Parser DB | `core/parser_db.py` | Read-only (`mode=ro`) доступ к `parser.db`, проверка `PRAGMA user_version` (схемы v1/v2) |
+| Librarian DB | `core/librarian_db.py` | Своя `librarian.db`, FTS5 (`unicode61`) над `messages.text` + `transcriptions.text`. `INDEX_VERSION=2` (`is_comment`, `post_message_id`) |
+| Инструменты | `core/tools.py` | 6 инструментов: `search`, `read_post`, `get_message`, `stats`, `whats_new`, `list_shelves` |
 | Фасад | `core/librarian_core.py` | `LibrarianCore` — открытые архивы, lifecycle, делегирование инструментам |
-| UI | `static/index.html` | Тёмная тема Rozitta, 3-колоночный layout, live-лог WS |
-| Тесты | `tests/test_tools.py` | 22 юнит-теста на демо-архиве |
-| Демо | `scripts/make_demo_archive.py` | Создаёт два тестовых архива в `output/` |
+| UI | `static/index.html` | 2-колоночный layout (sidebar + контент), 4 экрана, Rozitta-подсказки, dev-панель. **Генерируется** из макета |
+| Сборщик UI | `scripts/build_index_html.py` | Идемпотентно собирает `static/index.html` из UI-макета |
+| Тесты | `tests/test_tools.py` | 22 юнит-теста инструментов на демо-архиве |
+| WS smoke | `scripts/test_ui_ws.py` | 11 smoke-тестов циклов UI-1..UI-4 |
+| Демо | `scripts/make_demo_archive.py` | Создаёт два тестовых архива в `output/` (канал + форум, с комментариями и голосовым) |
 
 ## Запуск
 
@@ -26,18 +31,44 @@ pip install -r requirements.txt
 # 1. Создать демо-архивы (опционально, для первого знакомства)
 python3 scripts/make_demo_archive.py
 
-# 2. Запустить сервер
+# 2. Запустить сервер (откроет браузер сам через 1.5 c)
 python3 main.py
 # откроется на http://localhost:8011
 
-# 3. Тесты
-pytest tests/ -v
+# Без авто-открытия браузера (headless):
+python3 main.py --no-browser
 
-# 4. Сквозной smoke-тест через WebSocket
-bash scripts/run_and_test.sh
+# 3. Юнит-тесты
+pytest tests/ -v                 # 22 теста
+
+# 4. Сквозной smoke-тест через WebSocket (сервер должен быть запущен)
+python3 scripts/test_ui_ws.py    # 11 тестов
+
+# 5. Пересобрать UI из макета (после правки JS/CSS)
+python3 scripts/build_index_html.py
 ```
 
 Если порт 8011 занят — задайте `LIBRARIAN_PORT=8012 python3 main.py`.
+
+## UX — 4 экрана + dev-панель
+
+Hash-based routing, без сервер-сайд рендера:
+
+| Хеш                          | Экран                                     |
+|------------------------------|-------------------------------------------|
+| `#/`                         | **1. Главная:** карточки архивов          |
+| `#/a/{id}`                   | **2. Старт архива:** TOC + summary + recent |
+| `#/a/{id}/search?q=...`      | **3. Поиск:** реальные FTS-результаты     |
+| `#/a/{id}/m/{msg}`           | **4. Ридер:** пост + комментарии + расшифровка |
+| `#/a/{id}/shelf/{shelf}`     | Вариант 2 для конкретной полки            |
+
+- **Палитра Rozitta:** `#2B2B2B` фон, `#FF9500` акцент, `#FF6BC9` розовый,
+  `#F0F0F0` текст.
+- **Аватар Rozitta** в правом верхнем углу даёт контекстные подсказки
+  по 7 правилам из спецификации §6 (подсказки зависят от экрана и
+  состояния поиска).
+- **Dev-панель** открывается тройным кликом по логотипу: live-лог WS,
+  кнопки переиндексации, список открытых архивов.
 
 ## Архитектура
 
@@ -57,37 +88,71 @@ bash scripts/run_and_test.sh
                        └──┬──────────┘
                           ▼
                       tools.py
-                  ┌────────┴─────────┐
-                  ▼                  ▼
-        search() read_post()  stats() whats_new() list_shelves()
+            ┌────────┬────────┬────────┬────────┬────────┐
+            ▼        ▼        ▼        ▼        ▼        ▼
+        search() read_post() get_message() stats() whats_new() list_shelves()
 ```
+
+Браузер общается с сервером **только через WebSocket** на `/ws`.
+Сообщения вида `{"op": "...", "archive_id": "...", "args": {...}}`.
+Долгие SQL-операции уходят в threadpool через `asyncio.to_thread`,
+чтобы event loop мог параллельно слать live-логи.
 
 ## Принципы (из `librarian_рабочий_план.md`)
 
-- **База Parser — только чтение.** `parser.db` открывается через `file:...?mode=ro` + `PRAGMA query_only = ON`. Никаких записей.
-- **Своя база `librarian.db`** лежит рядом с `parser.db`. FTS5 (токенизатор `unicode61`) над `messages.text` + `transcriptions.text`.
-- **Префиксные формы** для русской морфологии: `обесценива*` находит «обесценивание», «обесценивает», «обесценивающее». ~90% покрытия без лемматизатора.
-- **5 инструментов** не знают про LLM — тестируются без модели. Их же использует UI и (на этапе 6) MCP-выход.
-- **Каждое попадание поиска — кликабельная ссылка** на конкретный пост (`#post/{chat_id}/{message_id}`).
+- **База Parser — только чтение.** `parser.db` открывается через
+  `file:...?mode=ro` + `PRAGMA query_only = ON`. Никаких записей.
+- **Своя база `librarian.db`** лежит рядом с `parser.db`. FTS5
+  (токенизатор `unicode61`) над `messages.text` + `transcriptions.text`.
+  Схема индекса версионирована (`INDEX_VERSION=2`).
+- **Префиксные формы** для русской морфологии: `обесценива*` находит
+  «обесценивание», «обесценивает», «обесценивающее». ~90% покрытия без
+  лемматизатора.
+- **6 инструментов** не знают про LLM — тестируются без модели. Их же
+  использует UI и (на этапе 6) MCP-выход.
+- **Каждое попадание поиска — кликабельная ссылка** на конкретный пост
+  (`#/a/{id}/m/{message_id}`).
+- **Динамические чипы.** Чипы-примеры на карточке архива не хранятся
+  в `archive_passport.json` (парсер их не производит). Чипы вычисляются
+  библиотекарем на лету: `LibrarianDB.top_terms()` читает FTS5-словарь
+  (`fts5vocab`) и возвращает топ-8 слов длиной ≥ 6. Простые средние
+  слова — без интерактивности.
 
 ## Что уже работает (этап 1)
 
 ✅ Скан `output/` на наличие архивов (`parser.db` + `archive_passport.json`)
 ✅ Открытие архива: read-only parser.db + создание/чтение librarian.db
-✅ Построение FTS5-индекса при первом открытии
-✅ `search()` с фильтрами (author, date_from/to, source), ≤ 20 хитов, сниппеты ≤ 300 символов
+✅ Построение FTS5-индекса при первом открытии (и при смене `INDEX_VERSION`)
+✅ `search()` с фильтрами (author, date_from/to, source/shelf), ≤ 20 хитов,
+   сниппеты ≤ 300 символов, метки «↳ в комментарии» для комментариев
 ✅ `read_post()` с пагинацией комментариев, транскрипцией, метаданными
+✅ `get_message()` — расширенная версия для UI-4: пост + транскрипция +
+   комментарии + соседи + ссылка t.me
 ✅ `stats()` — overview (счётчики, диапазон дат, топ авторов) и authors
-✅ `whats_new()` — что нового после отметки
+✅ `whats_new()` — что нового после отметки `since`
 ✅ `list_shelves()` — полки архива из паспорта
-✅ UI: карточки архивов, поисковая форма, рендер результатов, просмотр поста, live-лог
+✅ `top_terms()` — динамические чипы из FTS5-словаря
+✅ UI-1: карточки архивов с эмодзи, периодом, чипами
+✅ UI-2: старт архива — TOC (полки), summary, лента недавних сообщений
+✅ UI-3: реальный FTS-поиск с расширенным фильтром и обработкой нуля
+✅ UI-4: ридер — пост + транскрипция (для голосовых) + комментарии +
+   навигация prev/next + ссылка на t.me, подсветка терма из поиска
+✅ Аватар Rozitta с контекстными подсказками (7 правил из спецификации §6)
+✅ Dev-панель (тройной клик по логотипу): live-лог WS, переиндексация
+✅ Авто-открытие браузера после старта сервера (1.5 c, отключается `--no-browser`)
 ✅ 22 юнит-теста — все проходят
-✅ WS smoke-тест — полный цикл поиск→чтение
+✅ 11 WS smoke-тестов — все проходят
 
-## Дальнейшие этапы (по плану)
+## Что дальше
+
+Внутри этапа 1 — UI-5 (экран статистики), UI-6 («что нового»), UI-7
+(настройки/режимы как задел под этап 2). Все инструменты для UI-5 и
+UI-6 уже готовы (`stats`, `whats_new`) — нужна только UI-обвязка.
+
+После этапа 1 (по плану):
 
 - **Этап 2** — LLM-оркестратор (Ollama + OpenAI-совместимый API, цикл ≤ 12 шагов)
 - **Этап 3** — Верификатор (детерминированная проверка ссылок без LLM)
 - **Этап 4** — Режимы (Архивариус / Консультант / Свободный) + память
 - **Этап 5** — Стенд качества (10–15 эталонных вопросов)
-- **Этап 6** — MCP-выход (те же 5 инструментов наружу для Claude Desktop)
+- **Этап 6** — MCP-выход (те же инструменты наружу для Claude Desktop)
