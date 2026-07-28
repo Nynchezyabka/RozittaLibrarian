@@ -105,7 +105,18 @@ def search(
                 "author": h.author,
                 "date": h.date,
                 "snippet": h.snippet,
-                "url": f"#post/{h.chat_id}/{h.message_id}",
+                "is_comment": h.is_comment,
+                # post_message_id — для комментариев: message_id родительского поста.
+                # UI использует его для навигации: клик по комментарию открывает
+                # родительский пост с прокруткой к этому комментарию.
+                "post_message_id": h.post_message_id,
+                # URL-фрагмент для роутера. Если пост — /m/{message_id};
+                # если комментарий — /m/{post_message_id}?c={message_id}.
+                "url": (
+                    f"#/a/{archive.id}/m/{h.post_message_id}?c={h.message_id}"
+                    if h.is_comment and h.post_message_id
+                    else f"#/a/{archive.id}/m/{h.message_id}"
+                ),
             }
             for h in hits
         ],
@@ -206,6 +217,141 @@ def read_post(
                 for c in page
             ],
         },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_message (UI-4 — ридер)
+# ---------------------------------------------------------------------------
+
+def get_message(
+    archive: Archive,
+    parser_db: ParserDB,
+    *,
+    message_id: int,
+    chat_id: Optional[int] = None,
+    comment_limit: int = READ_POST_COMMENT_LIMIT,
+    comment_offset: int = 0,
+) -> dict:
+    """
+    Полное сообщение для ридера одним запросом (UI-спец. §5, §9).
+
+    Возвращает:
+        post          — текст, автор, дата, медиа-инфо, флаг is_comment
+        transcription — если есть голосовое сообщение с расшифровкой
+        comments      — комментарии (для постов канала) или ответы (для обычных)
+        neighbors     — prev/next по хронологии того же чата (только посты, не комментарии)
+        telegram_link — t.me/{username}/{message_id}, если username есть в паспорте
+        is_voice      — True, если у сообщения есть транскрипция (т.е. это была голосовая)
+
+    chat_id: если None — берётся из паспорта архива (паспорт хранит один chat_id).
+    Это упрощает URL ридера: #/a/{id}/m/{message_id} (без chat_id в пути).
+    """
+    # Если chat_id не передан — пробуем из паспорта
+    if chat_id is None:
+        chat_id = archive.passport.chat_id
+    if chat_id is None:
+        raise ToolError(
+            f"Не удалось определить chat_id для message_id={message_id}. "
+            "В паспорте архива chat_id отсутствует."
+        )
+
+    msg = parser_db.get_message_by_message_id(int(chat_id), int(message_id))
+    if msg is None:
+        raise ToolError(
+            f"Сообщение не найдено: chat_id={chat_id}, message_id={message_id}."
+        )
+
+    # Транскрипция (если голосовое)
+    transcription = None
+    tr = parser_db.get_transcription(msg.message_id, msg.chat_id)
+    if tr is not None:
+        transcription = {
+            "text": tr.text,
+            "model_type": tr.model_type,
+            "created_at": tr.created_at,
+        }
+    is_voice = transcription is not None
+
+    # Комментарии или ответы
+    comments_raw: list = []
+    is_channel_post = msg.post_id is None and not msg.is_comment
+    if is_channel_post:
+        comments_raw = parser_db.get_comments_for_post(int(chat_id), msg.message_id)
+    else:
+        comments_raw = parser_db.get_replies_to(int(chat_id), msg.message_id)
+
+    comment_limit = max(1, min(int(comment_limit or READ_POST_COMMENT_LIMIT), READ_POST_COMMENT_LIMIT))
+    comment_offset = max(0, int(comment_offset or 0))
+    total_comments = len(comments_raw)
+    page = comments_raw[comment_offset:comment_offset + comment_limit]
+
+    # Соседи по дате — только для навигации между постами (не комментариями)
+    prev_msg, next_msg = parser_db.get_neighbors_by_date(
+        int(chat_id), msg.message_id, msg.date
+    )
+
+    # Telegram-ссылка: t.me/{username}/{message_id}
+    # username в паспорте хранится с '@' — убираем для URL.
+    telegram_link = None
+    uname = archive.passport.username
+    if uname:
+        clean = uname.lstrip("@")
+        if clean:
+            telegram_link = f"https://t.me/{clean}/{msg.message_id}"
+
+    return {
+        "archive_id": archive.id,
+        "post": {
+            "internal_id": msg.id,
+            "chat_id": msg.chat_id,
+            "message_id": msg.message_id,
+            "topic_id": msg.topic_id,
+            "author": msg.author,
+            "username": msg.username,
+            "user_id": msg.user_id,
+            "date": msg.date,
+            "text": msg.text_or_empty(),
+            "media_path": msg.media_path,
+            "file_type": msg.file_type,
+            "file_size": msg.file_size,
+            "sender_type": msg.sender_type,
+            "is_comment": msg.is_comment,
+            "from_linked_group": msg.from_linked_group,
+            "reply_to_msg_id": msg.reply_to_msg_id,
+            "post_id": msg.post_id,
+        },
+        "is_voice": is_voice,
+        "transcription": transcription,
+        "comments": {
+            "total": total_comments,
+            "limit": comment_limit,
+            "offset": comment_offset,
+            "items": [
+                {
+                    "internal_id": c.id,
+                    "message_id": c.message_id,
+                    "author": c.author,
+                    "username": c.username,
+                    "date": c.date,
+                    "text": c.text_or_empty(),
+                    "sender_type": c.sender_type,
+                    "reply_to_msg_id": c.reply_to_msg_id,
+                }
+                for c in page
+            ],
+        },
+        "neighbors": {
+            "prev": {
+                "message_id": prev_msg.message_id,
+                "date": prev_msg.date,
+            } if prev_msg else None,
+            "next": {
+                "message_id": next_msg.message_id,
+                "date": next_msg.date,
+            } if next_msg else None,
+        },
+        "telegram_link": telegram_link,
     }
 
 

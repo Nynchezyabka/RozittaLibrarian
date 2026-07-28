@@ -44,7 +44,10 @@ from .parser_db import ParserDB, MessageRow
 
 
 LIBRARIAN_DB_FILENAME = "librarian.db"
-INDEX_VERSION = 1  # bump при изменении схемы FTS — триггерит перестройку
+# v1: исходная схема (source, internal_id, chat_id, message_id, author, date, snippet)
+# v2: добавлены is_comment, post_message_id — для метки «↳ в комментарии» в поиске
+#     и навигации из поиска-по-комментарию в ридер родительского поста.
+INDEX_VERSION = 2
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +65,8 @@ class FTSDoc:
     author: str
     date: str
     snippet: str          # сохранённый короткий текст (для быстрого показа)
+    is_comment: bool = False        # v2: сообщение является комментарием к посту
+    post_message_id: Optional[int] = None  # v2: message_id родительского поста (для комментариев)
 
 
 @dataclass
@@ -75,6 +80,8 @@ class SearchHit:
     author: str
     date: str
     snippet: str          # подсвеченный сниппет из FTS5 (≤ 300 символов)
+    is_comment: bool = False
+    post_message_id: Optional[int] = None  # для комментариев — message_id родительского поста
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +166,16 @@ class LibrarianDB:
                 )
                 """
             )
+            # v2: добавляем колонки, если их нет (для баз, созданных в v1).
+            # ALTER TABLE ADD COLUMN не имеет IF NOT EXISTS в SQLite — через try/except.
+            for col, decl in [
+                ("is_comment",       "INTEGER NOT NULL DEFAULT 0"),
+                ("post_message_id",  "INTEGER"),
+            ]:
+                try:
+                    cur.execute(f"ALTER TABLE fts_doc ADD COLUMN {col} {decl}")
+                except sqlite3.OperationalError:
+                    pass  # колонка уже есть
             cur.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_fts_doc_internal
@@ -169,6 +186,12 @@ class LibrarianDB:
                 """
                 CREATE INDEX IF NOT EXISTS idx_fts_doc_message_coord
                 ON fts_doc(chat_id, message_id)
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_fts_doc_post
+                ON fts_doc(post_message_id) WHERE post_message_id IS NOT NULL
                 """
             )
 
@@ -250,10 +273,15 @@ class LibrarianDB:
                     if not text:
                         done += 1
                         continue
+                    # v2: для комментариев post_id указывает на родительский пост.
+                    # У постов (is_comment=0) post_id обычно NULL.
+                    is_comment = 1 if msg.is_comment else 0
+                    post_mid = msg.post_id if msg.is_comment else None
                     cur.execute(
                         "INSERT INTO fts_doc "
-                        "(source, internal_id, chat_id, message_id, author, date, snippet) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "(source, internal_id, chat_id, message_id, author, date, snippet, "
+                        " is_comment, post_message_id) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             "message",
                             msg.id,
@@ -262,6 +290,8 @@ class LibrarianDB:
                             msg.author,
                             msg.date,
                             text[:300],
+                            is_comment,
+                            post_mid,
                         ),
                     )
                     doc_rowid = cur.lastrowid
@@ -353,6 +383,7 @@ class LibrarianDB:
             cur.execute(
                 "SELECT d.rowid, d.source, d.internal_id, d.chat_id, "
                 "       d.message_id, d.author, d.date, "
+                "       d.is_comment, d.post_message_id, "
                 "       snippet(fts_text, 0, '<<H>>', '<</H>>', '…', ?) AS snip "
                 "FROM fts_text JOIN fts_doc d ON d.rowid = fts_text.rowid "
                 "WHERE fts_text MATCH ? "
@@ -384,6 +415,8 @@ class LibrarianDB:
                 author=r["author"] or "",
                 date=r["date"] or "",
                 snippet=snip,
+                is_comment=bool(r["is_comment"]),
+                post_message_id=int(r["post_message_id"]) if r["post_message_id"] is not None else None,
             ))
             if len(hits) >= limit:
                 break
@@ -420,7 +453,8 @@ class LibrarianDB:
         with self.cursor() as cur:
             cur.execute(
                 "SELECT rowid, source, internal_id, chat_id, message_id, "
-                "       author, date, snippet FROM fts_doc WHERE rowid = ?",
+                "       author, date, snippet, is_comment, post_message_id "
+                "FROM fts_doc WHERE rowid = ?",
                 (rowid,),
             )
             r = cur.fetchone()
@@ -435,6 +469,8 @@ class LibrarianDB:
                 author=r["author"] or "",
                 date=r["date"] or "",
                 snippet=r["snippet"] or "",
+                is_comment=bool(r["is_comment"]),
+                post_message_id=int(r["post_message_id"]) if r["post_message_id"] is not None else None,
             )
 
     def get_doc_by_message_coord(
@@ -444,7 +480,8 @@ class LibrarianDB:
         with self.cursor() as cur:
             cur.execute(
                 "SELECT rowid, source, internal_id, chat_id, message_id, "
-                "       author, date, snippet FROM fts_doc "
+                "       author, date, snippet, is_comment, post_message_id "
+                "FROM fts_doc "
                 "WHERE chat_id = ? AND message_id = ? LIMIT 1",
                 (chat_id, message_id),
             )
@@ -460,4 +497,89 @@ class LibrarianDB:
                 author=r["author"] or "",
                 date=r["date"] or "",
                 snippet=r["snippet"] or "",
+                is_comment=bool(r["is_comment"]),
+                post_message_id=int(r["post_message_id"]) if r["post_message_id"] is not None else None,
             )
+
+    # ------------------------------------------------------------------
+    # v2: top_terms — топ-термины из FTS5-словаря для чипов-примеров
+    # ------------------------------------------------------------------
+
+    # Кэш стоп-слов: союзами, предлогами, местоимениями и т.п. — отбрасываем.
+    # Список намеренно короткий: задача — убрать только явный мусор, остальное
+    # отфильтруется требованиями min_len и алфавитностью.
+    _STOPWORDS_RU = frozenset({
+        # местоимения
+        "который","которая","которое","которые","этот","этого","эта","это","эти",
+        "тот","та","то","те","такой","такая","такое","такие","мой","моя","моё",
+        "мои","твой","твоя","твоё","твои","свой","своя","своё","свои","наш","наш",
+        "ваш","их","его","её","их","себя","себе","собой","меня","тебя","его","её",
+        # глаголы-связки и вспомогательные
+        "быть","был","была","было","были","есть","будет","будут","мочь","мог",
+        "могла","могло","могли","может","могут","должен","должна","должно",
+        # предлоги и союзы (unicode61 не отделяет их как отдельную категорию,
+        # но они часто оказываются в топе частот)
+        "что","чтобы","как","так","но","или","ибо","ли","же","бы","тоже","также",
+        "только","ещё","уже","когда","где","куда","откуда","почему","зачем",
+        "если","чтобы","хотя","потому","поэтому","при","про","через","между",
+        "перед","без","для","над","под","из-за","из-под","от","до","об","при",
+        # наречия времени/места
+        "там","тут","здесь","тогда","сейчас","потом","сначала","опять","всегда",
+        "никогда","часто","иногда","обычно",
+        # частицы
+        "бы","ли","же","ведь","вот","это","эти","то","не","ни","нет","да",
+        # прочие частые
+        "один","два","три","раз","время","дело","человек","люди","всё","ничего",
+    })
+
+    def top_terms(self, limit: int = 8, min_len: int = 6) -> list[str]:
+        """
+        Топ-N частотных терминов архива — для чипов-примеров под строкой
+        поиска (UI-спец. §3). Использует fts5vocab в режиме 'row' —
+        документная частота (в скольких документах термин встречается).
+
+        Фильтры:
+        - длина >= min_len (по умолчанию 6 — отсекает «и», «но», «как», «или»);
+        - только буквы (без цифр и пунктуации);
+        - не входит в стоп-слова.
+
+        Сортировка композитная: сначала по частоте (DESC), при равенстве —
+        по длине (DESC, длинные слова информативнее), затем по алфавиту.
+        На маленьких архивах, где у всех слов doc_freq=1, это даёт длинные
+        осмысленные термины вместо коротких стоп-слов.
+
+        Возвращает список терминов (строк), без частот.
+        """
+        limit = max(1, min(int(limit or 8), 50))
+        with self.cursor() as cur:
+            # Создаём vocab-таблицу, если её нет. 'row' = (term, doc, col).
+            cur.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS fts_vocab "
+                "USING fts5vocab(fts_text, 'row')"
+            )
+            # Группируем по term — COUNT(*) даёт документную частоту.
+            # Фильтр по длине и алфавиту — прямо в SQL, остальное (стоп-слова)
+            # проверяем в Python (список короткий).
+            cur.execute(
+                "SELECT term, COUNT(*) AS doc_freq "
+                "FROM fts_vocab "
+                "WHERE length(term) >= ? "
+                "GROUP BY term "
+                "ORDER BY doc_freq DESC, length(term) DESC, term ASC "
+                "LIMIT ?",
+                (min_len, limit * 10),  # ×10 — запас для стоп-слов
+            )
+            rows = cur.fetchall()
+
+        result: list[str] = []
+        for r in rows:
+            term = r["term"] or ""
+            # Только буквы (Unicode). Цифры/пунктуация/смесь — отбрасываем.
+            if not term.isalpha():
+                continue
+            if term.lower() in self._STOPWORDS_RU:
+                continue
+            result.append(term)
+            if len(result) >= limit:
+                break
+        return result

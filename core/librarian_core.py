@@ -144,6 +144,14 @@ class LibrarianCore:
         return T.read_post(archive, parser_db, lib_db,
                            chat_id=chat_id, message_id=message_id, **kw)
 
+    def get_message(self, archive_id: str, *, message_id: int,
+                    chat_id: Optional[int] = None, **kw) -> dict:
+        """UI-4 ридер: полное сообщение одним запросом."""
+        archive = self.open_archive(archive_id)
+        parser_db, _ = self._get_dbs(archive_id)
+        return T.get_message(archive, parser_db,
+                             message_id=message_id, chat_id=chat_id, **kw)
+
     def stats(self, archive_id: str, **kw) -> dict:
         archive = self.open_archive(archive_id)
         parser_db, _ = self._get_dbs(archive_id)
@@ -158,3 +166,26 @@ class LibrarianCore:
         archive = self.open_archive(archive_id)
         parser_db, _ = self._get_dbs(archive_id)
         return T.list_shelves(archive, parser_db)
+
+    def top_terms(self, archive_id: str, limit: int = 8) -> list[str]:
+        """
+        Топ-термины архива для чипов-примеров (UI-спец. §3).
+        Вычисляется на лету из FTS5-словаря librarian.db.
+        """
+        self.open_archive(archive_id)  # гарантирует, что индекс построен
+        _, lib_db = self._get_dbs(archive_id)
+        return lib_db.top_terms(limit=limit)
+
+    def open_archive_with_card(self, archive_id: str) -> tuple[Archive, list[str]]:
+        """
+        Открыть архив и вернуть его вместе с динамическими чипами.
+        Чипы считаются здесь, чтобы вызывающему коду (WS/HTTP) не нужно
+        было знать про librarian_db.
+        """
+        archive = self.open_archive(archive_id)
+        try:
+            chips = self.top_terms(archive_id, limit=8)
+        except Exception:
+            # Если FTS по какой-то причине не построен — не падаем, отдаём без чипов.
+            chips = []
+        return archive, chips

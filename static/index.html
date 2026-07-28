@@ -352,8 +352,46 @@ mark { background: var(--orange-soft); color: var(--orange); padding: 0 3px; bor
 .c-author { font-size: 0.76rem; font-weight: 600; color: var(--pink); }
 .c-date { font-family: 'JetBrains Mono', monospace; font-size: 0.64rem; color: var(--text-ter); margin-left: 6px; }
 .c-text { font-size: 0.8rem; line-height: 1.55; color: var(--text); margin-top: 4px; }
-.mc-head .mc-shelf.com { margin-left: auto; background: var(--pink-soft); color: var(--pink); border-color: rgba(255,107,201,0.3); }
+.comment-row.target {
+    border-left-color: var(--orange);
+    background: var(--orange-soft);
+    box-shadow: 0 0 0 1px rgba(255,149,0,0.25);
+}
+.comment-row.flash {
+    animation: cmt-flash 1.4s ease-out;
+}
+@keyframes cmt-flash {
+    0%   { background: rgba(255,149,0,0.45); }
+    100% { background: var(--orange-soft); }
+}
+.mc-head .mc-author {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.66rem;
+    color: var(--text-sec);
+    margin-left: auto;
+}
+.mc-head .mc-shelf.com { margin-left: 0; background: var(--pink-soft); color: var(--pink); border-color: rgba(255,107,201,0.3); }
 .mc-head .mc-shelf.com ~ .mc-shelf { margin-left: 0; }
+
+/* Блок расшифровки в ридере */
+.rd-transcription {
+    margin-top: 18px; padding: 14px 16px;
+    background: rgba(255,107,201,0.07);
+    border: 1px solid rgba(255,107,201,0.25);
+    border-radius: var(--rsm);
+}
+.rd-tr-h {
+    font-size: 0.78rem; font-weight: 600; color: var(--pink);
+    margin-bottom: 8px;
+}
+.rd-tr-model {
+    font-family: 'JetBrains Mono', monospace; font-weight: 400;
+    color: var(--text-sec); font-size: 0.7rem;
+}
+.rd-tr-text {
+    font-size: 0.84rem; line-height: 1.6; color: var(--text);
+    white-space: pre-wrap; word-wrap: break-word;
+}
 
 /* ===== DEV PANEL ===== */
 .devpanel {
@@ -605,7 +643,7 @@ mark { background: var(--orange-soft); color: var(--orange); padding: 0 3px; bor
 
     <footer class="app-footer">
         <span>Rozitta Librarian · этап 1 «Читальный зал»</span>
-        <span class="acc">этап 1 · экраны 1–2 — реальные данные, экраны 3–4 — заглушка</span>
+        <span class="acc">этап 1 · экраны 1–4 — реальные данные через WebSocket</span>
     </footer>
 
 </div>
@@ -671,13 +709,13 @@ mark { background: var(--orange-soft); color: var(--orange); padding: 0 3px; bor
 
 <script>
 /* =================================================================
- * Rozitta Librarian — UI Этап 1 (реализация UI-1 + UI-2)
+ * Rozitta Librarian — UI Этап 1 (реализация UI-1 + UI-2 + UI-3 + UI-4)
  * Спецификация: /home/z/my-project/upload/librarian_ui_спецификация_этап1.md
  *
  * Подключение к бэкенду: WebSocket → ws://<host>/ws
  *   Операции: list_archives, scan_archives, open_archive,
- *             list_shelves, stats, whats_new
- *             (search, read_post — пока mock для экранов 3 и 4)
+ *             list_shelves, stats, whats_new, top_terms,
+ *             search, get_message
  * ================================================================= */
 
 const $ = id => document.getElementById(id);
@@ -695,65 +733,15 @@ const S = {
   shelves: [],             // ответ list_shelves
   statsData: null,         // ответ stats
   whatsNew: [],            // ответ whats_new
-  query: '', results: [],  // для UI-3 (mock-сценарий)
+  // UI-3: поиск
+  query: '',
+  searchResults: [],       // последний ответ search (hits[])
+  searchFilters: {author: null, date_from: null, date_to: null},
+  // UI-4: ридер
+  readerMsg: null,         // последний ответ get_message
+  readerCommentId: null,   // ?c= параметр — прокрутиться к этому комментарию
   backCtx: null,           // { label, restore() }
-  readerItem: null,
   rzShown: {},
-  // Mock-данные для UI-3/UI-4 — чтобы визуально показать, как будет выглядеть.
-  // Реальные данные подключим в следующем заходе.
-  mock: null,
-};
-
-/* ================= MOCK для UI-3/UI-4 (временно) =================
- * Это тот же mock, что в макете, но только для экранов 3 и 4.
- * На экранах 1 и 2 — реальные данные с бэкенда.
- */
-S.mock = {
-  phil: {
-    id: 'phil', emoji: '📚', name: 'Философия буднего дня',
-    handle: '@philosophy_daily', type: 'канал', dates: '15 сен — 1 окт 2024',
-    chips: ['обесценивание', 'ценности', 'интерфейс'],
-    items: [
-      { id: 1, shelf: 'messages', date: '15 сен 2024, 09:10', d: '2024-09-15', author: '@philosophy_daily',
-        text: 'Ценности не выбирают на полке, как товар. Их обнаруживают задним числом — по тому, на что мы тратим внимание, когда никто не проверяет. Посмотри на свой вчерашний день: вот твой честный список ценностей.',
-        comments: [
-          { author: '@vassa_k', date: '15 сен 2024, 12:40', text: 'Список ценностей из вчерашнего дня — отрезвляющее упражнение, спасибо.' }
-        ] },
-      { id: 2, shelf: 'messages', date: '18 сен 2024, 11:47', d: '2024-09-18', author: '@philosophy_daily',
-        text: 'Язык — это интерфейс между нами и миром. Плохой интерфейс скрывает функциональность; бедный словарь скрывает оттенки опыта. Учить новые слова — значит расширять то, что вообще можно заметить.' },
-      { id: 8, shelf: 'messages', voice: true, rec: 7, date: '25 сен 2024, 18:55', d: '2024-09-25', author: '@philosophy_daily',
-        text: 'Аудио-эфир «Ценности и цена», 42 минуты. Слушайте в записи — или читайте расшифровку.' },
-      { id: 7, shelf: 'records', src: 8, date: '25 сен 2024, 19:00', d: '2024-09-25', author: '@philosophy_daily',
-        text: 'Всем привет, это запись эфира про ценности и цену. Мы часто путаем эти два слова, а между тем цена — то, что мы платим, а ценность — то, что получаем. Обесценивание начинается там, где мы перестаём различать одно и другое.\n\n[фрагмент расшифровки, полная запись — 42 минуты]' },
-      { id: 3, shelf: 'messages', date: '28 сен 2024, 14:22', d: '2024-09-28', author: '@philosophy_daily',
-        text: 'Проблема обесценивания труда в современных условиях не в том, что платят мало. Она в том, что результат труда перестал быть видимым: закрытая задача исчезает в трекере, а сложенная стена стоит десятилетиями. Невидимое легко обесценить.',
-        comments: [
-          { author: '@vassa_k', date: '28 сен 2024, 15:10', text: 'Очень точно про невидимость результата. У нас помогло еженедельное демо — труд снова стал видимым.' },
-          { author: '@dim5x', date: '28 сен 2024, 16:02', text: 'А что делать с трудом, который невидим по своей природе — поддержка, инфраструктура?' }
-        ] },
-      { id: 4, shelf: 'messages', date: '29 сен 2024, 10:05', d: '2024-09-29', author: '@philosophy_daily',
-        text: 'Обесценивание чужого опыта начинается со слов «да это же просто». Просто — для того, кто уже прошёл путь. Уважение к сложности чужого пути — минимальная форма честности.' },
-      { id: 5, shelf: 'messages', date: '30 сен 2024, 16:30', d: '2024-09-30', author: '@philosophy_daily',
-        text: 'Привычка — это решение, принятое один раз и исполняемое бесплатно. Сила воли дорога, привычки дёшевы.' },
-      { id: 6, shelf: 'messages', date: '1 окт 2024, 12:00', d: '2024-10-01', author: '@philosophy_daily',
-        text: 'Итоги сентябрьского цикла: говорили про ценности, интерфейсы восприятия и обесценивание. Общая нить — внимание.' },
-    ]
-  },
-  pyforum: {
-    id: 'pyforum', emoji: '💬', name: 'Tech Forum — Python',
-    handle: '@pyforum', type: 'группа', dates: '10 фев — 5 мар 2025',
-    chips: ['асинхронность', 'типизация'],
-    items: [
-      { id: 11, shelf: 'messages', date: '10 фев 2025, 13:15', d: '2025-02-10', author: '@dim5x',
-        text: 'Коллеги, кто уже переводил большой проект на строгую типизацию? Интересует, насколько mypy в strict-режиме ловит реальные баги.' },
-      { id: 12, shelf: 'messages', date: '14 фев 2025, 18:40', d: '2025-02-14', author: '@vassa_k',
-        text: 'Переводили. Типизация окупилась при первом же рефакторинге: mypy подсветил все места, где поменялась сигнатура.' },
-      { id: 13, shelf: 'messages', date: '20 фев 2025, 09:02', d: '2025-02-20', author: '@dim5x',
-        text: 'Вопрос про асинхронность: FastAPI + SQLite. Есть ли смысл в async-драйвере, если база локальная?' },
-      { id: 14, shelf: 'messages', date: '5 мар 2025, 21:11', d: '2025-03-05', author: '@vassa_k',
-        text: 'Для локальной однопользовательской базы асинхронность драйвера почти ничего не даёт — узкое место не там.' },
-    ]
-  }
 };
 
 /* ================= WEBSOCKET ================= */
@@ -766,7 +754,6 @@ function wsConnect(){
     S.wsConnected = true;
     $('conn-warn').style.display = 'none';
     devLog('WebSocket: подключён');
-    // На старте — сразу получить список архивов для экрана 1
     wsSend({op: 'list_archives'});
   };
 
@@ -774,13 +761,10 @@ function wsConnect(){
     S.wsConnected = false;
     $('conn-warn').style.display = 'inline-flex';
     devLog('WebSocket: соединение закрыто', 'warn');
-    // Попытка переподключения через 2 сек
     setTimeout(() => { if (!S.wsConnected) wsConnect(); }, 2000);
   };
 
-  S.ws.onerror = (e) => {
-    devLog('WebSocket: ошибка', 'error');
-  };
+  S.ws.onerror = () => devLog('WebSocket: ошибка', 'error');
 
   S.ws.onmessage = (ev) => {
     let msg;
@@ -798,8 +782,6 @@ function wsSend(payload){
 }
 
 /* ================= ОБРАБОТКА WS-СООБЩЕНИЙ ================= */
-const _pending = {}; // op → callback (для упрощённой request/response поверх потокового WS)
-
 function handleWsMessage(msg){
   if (msg.type === 'hello'){
     devLog(`hello: ${msg.message} (порт ${msg.port})`);
@@ -830,10 +812,8 @@ function handleResult(op, data){
     return;
   }
   if (op === 'open_archive'){
-    // data = { card, passport }
     S.archive = data.card;
     S.archiveFull = data.passport;
-    // После открытия архива — параллельно получить полки, сводку, последние
     if (S.archive){
       wsSend({op: 'list_shelves', archive_id: S.archive.id});
       wsSend({op: 'stats',        archive_id: S.archive.id});
@@ -853,13 +833,32 @@ function handleResult(op, data){
   }
   if (op === 'whats_new'){
     S.whatsNew = data.items || data.posts || data.recent || [];
-    // Если ждали полку — отрисуем полку, иначе стартовую страницу
     if (S._pendingShelf){
       renderShelfFromWhatsNew(S._pendingShelf);
       S._pendingShelf = null;
     } else {
       renderStart();
     }
+    return;
+  }
+  if (op === 'top_terms'){
+    // Обновляем чипы, если они пришли отдельной операцией
+    if (data.terms && S.archive){
+      S.archive.chips = data.terms;
+      renderSidebarAfterOpen();
+    }
+    return;
+  }
+  if (op === 'search'){
+    S.query = data.query || S.query;
+    S.searchResults = data.hits || [];
+    S.searchFilters = data.filters || S.searchFilters;
+    renderSearchResults();
+    return;
+  }
+  if (op === 'get_message'){
+    S.readerMsg = data;
+    renderReader(data);
     return;
   }
   devLog(`op=${op} — нет обработчика, данные в логе`, 'warn');
@@ -888,6 +887,8 @@ window.addEventListener('hashchange', route);
 window.addEventListener('DOMContentLoaded', () => {
   if (new URLSearchParams(location.search).get('debug') === '1') devToggle(true);
   $('crumb-home').onclick = () => nav('#/');
+  // Enter в строке поиска — запуск поиска
+  $('q-input').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
   wsConnect();
   route();
 });
@@ -899,10 +900,7 @@ function route(){
   if (!p.length) { show('home'); return; }
   if (p[0] === 'a' && p[1]){
     if (!S.archive || S.archive.id !== p[1]){
-      // Архив ещё не открыт — запросим открытие
       openArchive(p[1], /*navigate=*/false);
-      // После открытия route() вызовется снова через renderStart / renderShelf / renderReader
-      // А пока — покажем archive-скрин как загружающийся
       show('archive');
       return;
     }
@@ -912,7 +910,10 @@ function route(){
       if (q){ $('q-input').value = q; runSearch(q); }
       else renderStart();
     }
-    else if (p[2] === 'm' && p[3])     renderReader(parseInt(p[3],10));
+    else if (p[2] === 'm' && p[3])     {
+      const cmt = new URLSearchParams(queryPart||'').get('c');
+      openReader(parseInt(p[3],10), cmt ? parseInt(cmt,10) : null);
+    }
     else                               renderStart();
     return;
   }
@@ -940,7 +941,7 @@ function showView(v){
   if (v === 'shelf') document.querySelector(`[data-nav="shelf-${S.shelf}"]`)?.classList.add('active');
 }
 
-/* ---- Экран 1: список архивов (РЕАЛЬНЫЕ ДАННЫЕ) ---- */
+/* ---- Экран 1: список архивов ---- */
 function renderHome(){
   const grid = $('arch-grid');
   if (!S.archives.length){
@@ -970,23 +971,21 @@ function renderHome(){
   rzSay('home','home-hint','Выбери архив — и я помогу найти в нём что угодно.');
 }
 
-/* ---- Открытие архива (РЕАЛЬНЫЕ ДАННЫЕ) ---- */
+/* ---- Открытие архива ---- */
 function openArchive(id, navigate=true){
   S.archive = null; S.shelves = []; S.statsData = null; S.whatsNew = [];
+  S.searchResults = []; S.readerMsg = null;
   show('archive');
   wsSend({op: 'open_archive', archive_id: id});
   if (navigate) nav(`#/a/${id}`);
 }
 
 function renderSidebarAfterOpen(){
-  // Вызывается после list_shelves и stats (могут приходить в любом порядке)
   if (!S.archive) return;
   const a = S.archive;
   $('side-emoji').textContent = a.emoji || '📦';
   $('side-name').textContent = a.title || a.id;
 
-  // Полки из ответа list_shelves — это массив {kind, label, count}
-  // По спецификации полки = "messages" (Сообщения) и "transcriptions" (Записи)
   let m = 0, r = 0;
   if (Array.isArray(S.shelves)){
     for (const sh of S.shelves){
@@ -994,7 +993,6 @@ function renderSidebarAfterOpen(){
       if (sh.kind === 'transcriptions') r = sh.count || 0;
     }
   }
-  // Fallback на паспортные счётчики, если list_shelves ещё не пришёл
   if (m === 0 && a.messages_count) m = a.messages_count;
   if (r === 0 && a.transcriptions_count) r = a.transcriptions_count;
 
@@ -1002,18 +1000,17 @@ function renderSidebarAfterOpen(){
   $('cnt-records').textContent = r;
   $('toc-records').style.display = r ? 'flex' : 'none';
 
-  // Сводка — частично из карточки, частично из stats
   $('sum-handle').textContent = a.username || '—';
   $('sum-type').textContent = a.type_label || a.chat_type || '—';
   $('sum-dates').textContent = a.date_period || '—';
   $('sum-msg').textContent = m;
   $('sum-rec').textContent = r;
 
-  // Чипы — из паспорта (поле chips)
+  // Чипы — теперь динамические, вычисляются бэкендом из FTS5
   const chips = a.chips || [];
   $('chips').innerHTML = chips.length
     ? chips.map(c => `<span class="chip" onclick="chipSearch('${esc(c).replace(/'/g,"\\'")}')">${esc(c)}</span>`).join(' ')
-    : '<span style="color:var(--text-ter);font-size:0.72rem;">(нет примеров — начни печатать слово)</span>';
+    : '<span style="color:var(--text-ter);font-size:0.72rem;">(архив только что открылся — попробуй любое слово)</span>';
 }
 
 function renderStart(){
@@ -1024,10 +1021,9 @@ function renderStart(){
   const r = a.transcriptions_count || 0;
   $('start-sub').textContent = `${a.type_label || a.chat_type} · ${m} сообщений${r?` · ${r} запись`:''} · ${a.date_period || ''}`;
 
-  // Последние сообщения — из whats_new (limit=3)
   const recent = S.whatsNew || [];
   if (recent.length){
-    $('start-recent').innerHTML = recent.map(i => msgCardReal(i, 'start')).join('');
+    $('start-recent').innerHTML = recent.map(i => msgCardFromWhatsNew(i, 'start')).join('');
   } else {
     $('start-recent').innerHTML = `<div style="color:var(--text-ter);padding:20px 0;font-size:0.8rem;">Загружаю последние сообщения…</div>`;
   }
@@ -1036,35 +1032,30 @@ function renderStart(){
   rzSay('side','first-open','Начни с поиска или загляни на полку слева. Не знаешь, что искать — попробуй слова под строкой поиска.');
 }
 
-/* Карточка сообщения из РЕАЛЬНОГО ответа whats_new
- * Структура whats_new: { items: [{ internal_id, chat_id, message_id, author, date, text_preview, url }, ...] }
- * Приводим к виду, удобному для UI.
+/* Карточка сообщения из ответа whats_new (для стартовой страницы и полок).
+ * whats_new возвращает: { internal_id, chat_id, message_id, author, date, text_preview, url }
  */
-function msgCardReal(item, from='start'){
+function msgCardFromWhatsNew(item, from='start'){
   const id   = item.message_id || item.id || '?';
   const text = item.text_preview || item.text || '';
   const date = item.date || '';
   const author = item.author || item.username || '';
-  // whats_new не отличает сообщения от записей — на UI-3/UI-4 добавим флаг
-  // через get_message. Пока считаем всё сообщением.
-  const isRec = false;
   const preview = text.length > 150 ? text.slice(0, 150) + '…' : text;
-  return `<div class="msg-card" onclick="openReaderMock(${id},'${from}')" title="Читать (UI-4 — следующий заход)">
+  return `<div class="msg-card" onclick="openReader(${id}, null, '${from}')" style="cursor:pointer;">
     <div class="mc-head">
       <span class="mc-id">#${esc(id)}</span>
-      <span class="mc-date">${esc(date)}</span>
-      <span class="mc-shelf ${isRec?'rec':''}">${isRec?'🎙 запись':'💬 сообщение'}</span>
+      <span class="mc-date">${esc(formatDateShort(date))}</span>
+      <span class="mc-shelf">💬 сообщение</span>
     </div>
     <div class="mc-text">${esc(preview) || '<em>(без текста)</em>'}</div>
     <div class="mc-read">Читать →</div>
   </div>`;
 }
 
-/* ---- Экран 2: полка (РЕАЛЬНЫЕ ДАННЫЕ через whats_new с большим лимитом) ----
- * Ограничение: whats_new сейчас не фильтрует по shelf. Для полки "messages"
- * это ок (возвращаются последние N сообщений). Для полки "records" — будут
- * показаны сообщения вперемешку. Когда добавим операцию list_shelf_items
- * (или расширим whats_new параметром shelf) — заменим.
+/* ---- Полка ----
+ * whats_new сейчас не фильтрует по shelf. Для полки "messages" это ок.
+ * Для полки "records" — будут показаны сообщения вперемешку. Когда добавим
+ * фильтр по shelf в whats_new — заменим.
  */
 function renderShelf(shelf){
   if (!S.archive) return;
@@ -1083,104 +1074,123 @@ function renderShelfFromWhatsNew(shelf){
   $('shelf-title').textContent = shelf === 'messages' ? '💬 Сообщения' : '🎙 Записи';
   $('shelf-sub').textContent = `${n} на этой полке · сначала новые`;
   $('shelf-list').innerHTML = n
-    ? items.map(i => msgCardReal(i, 'shelf')).join('')
+    ? items.map(i => msgCardFromWhatsNew(i, 'shelf')).join('')
     : '<div style="color:var(--text-ter);padding:20px 0;font-size:0.8rem;">На этой полке ничего нет.</div>';
   showView('shelf');
 }
 
-/* ================= UI-3/UI-4: ПОИСК И РИДЕР (mock) =================
- * Пока не реализованы на бэке полностью (нет get_message, нет расширенной
- * индексации комментариев), используем mock-данные из макета.
- * Когда сделаем UI-3 и UI-4 — заменим на wsSend({op:'search', ...}) и
- * wsSend({op:'get_message', ...}).
- */
-function tokenize(q){ return q.toLowerCase().split(/\s+/).filter(t => t.length >= 2); }
-function matches(text, tokens){
-  const words = (text||'').toLowerCase().split(/[^а-яa-zё0-9]+/i);
-  return tokens.every(t => words.some(w => w.startsWith(t)));
-}
-function highlight(text, tokens){
-  if (!tokens.length) return esc(text);
-  const re = new RegExp('(^|[^а-яa-zё0-9])(' + tokens.map(t => t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|') + ')([а-яa-zё0-9]*)','gi');
-  return esc(text).replace(re, (m,pre,tok,rest) => pre + '<mark>' + tok + rest + '</mark>');
-}
-function snippet(text, tokens, len=170){
-  const lower = (text||'').toLowerCase();
-  let pos = 0;
-  for (const t of tokens){ const p = lower.indexOf(t); if (p >= 0){ pos = p; break; } }
-  let start = Math.max(0, pos - 60);
-  let cut = (text||'').slice(start, start + len);
-  return (start > 0 ? '…' : '') + cut + (start + len < (text||'').length ? '…' : '');
-}
+/* ================= UI-3: ПОИСК (РЕАЛЬНЫЕ ДАННЫЕ) ================= */
 
+/* toggleAdv — раскрыть/свернуть «Точный поиск» */
 function toggleAdv(){
   $('adv-panel').classList.toggle('open');
   $('adv-toggle').classList.toggle('open');
 }
-function chipSearch(q){ $('q-input').value = q; doSearch(); }
-$('q-input').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
 
+/* chipSearch — клик по чипу */
+function chipSearch(q){
+  $('q-input').value = q;
+  doSearch();
+}
+
+/* doSearch — обработчик Enter / кнопки «Искать» */
 function doSearch(){
   const q = $('q-input').value.trim();
   if (!q) return;
   nav(`#/a/${S.archive.id}/search?q=${encodeURIComponent(q)}`);
 }
 
+/* runSearch — посылает WS-операцию search с расширенными фильтрами */
 function runSearch(q){
-  // Mock-поиск: данные берём из S.mock по id архива.
-  // Когда сделаем UI-3 — заменим на wsSend({op:'search', archive_id, args:{query:q, ...}})
-  const mockDb = S.mock[S.archive.id];
-  if (!mockDb){
-    $('results-count').innerHTML = '';
-    $('results-list').innerHTML = `<div class="no-results"><div class="big">🚧</div>
-      Поиск будет доступен после реализации UI-3.<br>
-      Сейчас mock-поиск работает только для демо-архивов.</div>`;
-    showView('results');
-    return;
-  }
-  const tokens = tokenize(q);
-  const res = mockDb.items.filter(i => matches(i.text, tokens) || (i.comments||[]).some(c => matches(c.text, tokens)));
-  S.query = q; S.results = res;
-  devLog(`search (mock): "${q}" → ${res.length} hits`);
-  if (!res.length){
-    $('results-count').innerHTML = '';
-    $('results-list').innerHTML = `<div class="no-results"><div class="big">🐸</div>
-      По слову «${esc(q)}» я ничего не нашла.<br>Попробуй начало слова или другой корень — я ищу по началу слов.</div>`;
-  } else {
-    const n = res.length;
-    $('results-count').innerHTML = `Найдено: <b>${n}</b> совпадени${n===1?'е':n<5?'я':'й'} по запросу «${esc(q)}» <span style="color:var(--text-ter);font-size:0.74rem;">(mock — UI-3 в разработке)</span>`;
-    $('results-list').innerHTML = res.map(i => msgCardMock(i, tokens, 'results')).join('');
-    rzSay('side','first-hit','Нашла! Нажми «Читать», чтобы открыть сообщение целиком.');
-  }
+  if (!S.archive) return;
+  // Собираем фильтры из adv-панели
+  const author = $('q-author').value.trim() || null;
+  const dateFrom = $('q-from').value || null;
+  const dateTo = $('q-to').value || null;
+  // Если дата есть — приводим к ISO (с временем), т.к. parser.db хранит даты с T...
+  const args = {query: q};
+  if (author) args.author = author;
+  if (dateFrom) args.date_from = dateFrom + 'T00:00:00';
+  if (dateTo)   args.date_to   = dateTo   + 'T23:59:59';
+  S.query = q;
+  S.searchResults = []; // очистим старые результаты
+  wsSend({op: 'search', archive_id: S.archive.id, args});
+  // Сразу покажем экран результатов с лоадером
+  $('results-count').innerHTML = `<span style="color:var(--text-ter)">Ищу «${esc(q)}»…</span>`;
+  $('results-list').innerHTML = '';
   showView('results');
 }
 
-function msgCardMock(item, tokens=[], from='start'){
-  const isRec = item.shelf === 'records';
-  let srcText = item.text, comBadge = '';
-  if (tokens.length && !matches(item.text, tokens)){
-    const c = (item.comments||[]).find(c => matches(c.text, tokens));
-    if (c){ srcText = c.text; comBadge = `<span class="mc-shelf com">↳ в комментарии</span>`; }
+/* renderSearchResults — отрисовка после ответа search */
+function renderSearchResults(){
+  const q = S.query;
+  const hits = S.searchResults || [];
+  const n = hits.length;
+  if (!n){
+    $('results-count').innerHTML = '';
+    $('results-list').innerHTML = `<div class="no-results"><div class="big">🐸</div>
+      По слову «${esc(q)}» я ничего не нашла.<br>
+      Попробуй начало слова или другой корень — я ищу по началу слов.</div>`;
+    rzSay('side','zero-results',`По слову «${q}» ничего не нашла. Попробуй начало слова или другой корень.`);
+    return;
   }
-  const body = tokens.length ? highlight(snippet(srcText, tokens), tokens) : esc(item.text.slice(0,150)) + (item.text.length>150?'…':'');
-  return `<div class="msg-card" onclick="openReaderMock(${item.id},'${from}')">
+  const w = n === 1 ? 'совпадение' : n < 5 ? 'совпадения' : 'совпадений';
+  $('results-count').innerHTML = `Найдено: <b>${n}</b> ${w} по запросу «${esc(q)}»`;
+  $('results-list').innerHTML = hits.map(h => searchHitCard(h)).join('');
+  rzSay('side','first-hit','Нашла! Нажми «Читать», чтобы открыть сообщение целиком.');
+}
+
+/* searchHitCard — карточка одного результата.
+ * hit = {
+ *   message_id, post_message_id, is_comment, author, date, snippet, url,
+ *   source, ...
+ * }
+ * Сниппет приходит с <<H>>..<</H>> — превращаем в <mark>..</mark>.
+ */
+function searchHitCard(h){
+  const isComment = !!h.is_comment;
+  const targetId = isComment && h.post_message_id ? h.post_message_id : h.message_id;
+  const commentId = isComment ? h.message_id : null;
+  const snippetHtml = highlightSnippet(h.snippet || '');
+  const shelfLabel = h.source === 'transcription'
+    ? '🎙 расшифровка'
+    : isComment
+      ? '↳ в комментарии'
+      : '💬 сообщение';
+  const shelfClass = h.source === 'transcription' ? 'rec' : (isComment ? 'com' : '');
+  return `<div class="msg-card" onclick="openReader(${targetId}, ${commentId ? commentId : 'null'}, 'results')" style="cursor:pointer;">
     <div class="mc-head">
-      <span class="mc-id">#${item.id}</span>
-      <span class="mc-date">${esc(item.date)}</span>
-      ${comBadge}
-      <span class="mc-shelf ${isRec?'rec':''}">${isRec?'🎙 запись':item.voice?'🎙 аудио':'💬 сообщение'}</span>
+      <span class="mc-id">#${esc(targetId)}</span>
+      <span class="mc-date">${esc(formatDateShort(h.date))}</span>
+      <span class="mc-author">@${esc((h.author||'').replace('@',''))}</span>
+      <span class="mc-shelf ${shelfClass}">${shelfLabel}</span>
     </div>
-    <div class="mc-text">${body}</div>
+    <div class="mc-text">${snippetHtml}</div>
     <div class="mc-read">Читать →</div>
   </div>`;
 }
 
-function openReaderMock(id, from){
+/* highlightSnippet — превращает <<H>>..<</H>> в <mark>..</mark> */
+function highlightSnippet(s){
+  return esc(s||'')
+    .replace(/&lt;&lt;H&gt;&gt;/g, '<mark>')
+    .replace(/&lt;&lt;\/H&gt;&gt;/g, '</mark>');
+}
+
+/* ================= UI-4: РИДЕР (РЕАЛЬНЫЕ ДАННЫЕ) ================= */
+
+/* openReader — вызывает WS-операцию get_message.
+ * message_id — целевой пост (или родительский пост комментария).
+ * commentId — необязательный ?c= параметр: к этому комментарию прокрутиться.
+ * from — контекст возврата: 'start' | 'shelf' | 'results'.
+ */
+function openReader(messageId, commentId, from){
+  // Запоминаем контекст возврата
   const view = document.querySelector('.view.active');
   const scroll = view ? view.scrollTop : 0;
   if (from === 'results'){
-    const q = S.query, res = S.results;
-    S.backCtx = { label: `← К результатам («${q}», ${res.length})`,
+    const q = S.query, n = (S.searchResults||[]).length;
+    S.backCtx = { label: `← К результатам («${q}», ${n})`,
       restore(){ nav(`#/a/${S.archive.id}/search?q=${encodeURIComponent(q)}`); setTimeout(()=> $('view-results').scrollTop = scroll, 0); } };
   } else if (from === 'shelf'){
     const sh = S.shelf;
@@ -1189,69 +1199,189 @@ function openReaderMock(id, from){
   } else {
     S.backCtx = { label: '← К обзору', restore(){ nav(`#/a/${S.archive.id}`); } };
   }
-  nav(`#/a/${S.archive.id}/m/${id}`);
+  S.readerCommentId = commentId;
+  S.readerMsg = null;
+
+  // Сразу обновим URL (через nav, чтобы сработал route → а если уже там — вручную запросим)
+  const hash = `#/a/${S.archive.id}/m/${messageId}` + (commentId ? `?c=${commentId}` : '');
+  if (location.hash !== hash){
+    nav(hash);
+  }
+  // Загружаем сообщение
+  wsSend({op: 'get_message', archive_id: S.archive.id, args: {message_id: messageId}});
+  // Лоадер
+  $('rd-title').textContent = 'Загружаю…';
+  $('rd-author').textContent = '—';
+  $('rd-date').textContent = '—';
+  $('rd-body').innerHTML = `<p style="color:var(--text-ter);">Открываю сообщение #${messageId}…</p>`;
+  $('rd-tg').style.display = 'none';
+  $('rd-recplate').style.display = 'none';
+  $('rd-linked').innerHTML = '';
+  $('rd-comments').innerHTML = '';
+  $('rn-prev').disabled = true; $('rn-next').disabled = true;
+  $('rn-prev-t').textContent = ''; $('rn-next-t').textContent = '';
+  $('reader-back').textContent = S.backCtx ? S.backCtx.label : '← Назад';
+  showView('reader');
 }
 
-function renderReader(id){
-  // Mock-ридер: данные из S.mock
-  const mockDb = S.mock[S.archive ? S.archive.id : ''];
-  if (!mockDb){
-    $('rd-title').textContent = '🚧 UI-4 — следующий заход';
-    $('rd-author').textContent = '—';
-    $('rd-date').textContent = '—';
-    $('rd-body').innerHTML = `<p style="color:var(--text-sec);">Ридер будет подключён к реальному бэкенду после реализации операции <code>get_message</code> (спецификация §9).</p>`;
-    $('rd-tg').style.display = 'none';
-    $('rd-linked').innerHTML = '';
-    $('rd-comments').innerHTML = '';
-    $('rn-prev').disabled = true; $('rn-next').disabled = true;
-    $('reader-back').textContent = S.backCtx ? S.backCtx.label : '← Назад';
-    showView('reader');
+/* renderReader — отрисовка ридера после ответа get_message.
+ * data = {
+ *   post: { message_id, author, username, date, text, is_comment, post_id, ... },
+ *   is_voice: bool,
+ *   transcription: { text, model_type, created_at } | null,
+ *   comments: { total, items: [{ message_id, author, username, date, text, ... }] },
+ *   neighbors: { prev: { message_id, date } | null, next: { ... } | null },
+ *   telegram_link: "https://t.me/..." | null,
+ * }
+ */
+function renderReader(data){
+  if (!data || !data.post){
+    $('rd-title').textContent = 'Сообщение не найдено';
+    $('rd-body').innerHTML = `<p style="color:var(--text-sec);">Не удалось загрузить сообщение.</p>`;
     return;
   }
-  const item = mockDb.items.find(i => i.id === id);
-  if (!item) return;
-  S.readerItem = item;
-  const isRec = item.shelf === 'records';
-  const tokens = (S.query && S.results.some(r=>r.id===id)) ? tokenize(S.query) : [];
+  const p = data.post;
+  const isVoice = !!data.is_voice;
+  const tr = data.transcription;
+  const coms = (data.comments && data.comments.items) || [];
+  const cmtTotal = (data.comments && data.comments.total) || 0;
+  const nb = data.neighbors || {};
+  const tg = data.telegram_link;
+
+  // Подсветка поискового запроса — если пришли из поиска
+  const tokens = (S.backCtx && S.query && S.backCtx.label && S.backCtx.label.includes('результатам'))
+    ? tokenizeQuery(S.query) : [];
+
   $('reader-back').textContent = S.backCtx ? S.backCtx.label : '← К обзору';
-  $('rd-title').textContent = (isRec ? 'Запись' : 'Сообщение') + ' #' + item.id;
-  $('rd-recplate').style.display = isRec ? 'inline-flex' : 'none';
-  $('rd-ava').textContent = (item.author||'@?').replace('@','')[0].toUpperCase();
-  $('rd-author').textContent = item.author;
-  $('rd-date').textContent = item.date;
-  $('rd-body').innerHTML = highlight(item.text, tokens);
-  $('rd-tg').style.display = isRec ? 'none' : 'inline-flex';
-  const handle = (mockDb.handle||'').replace('@','');
-  $('rd-tg').href = `https://t.me/${handle}/${item.id}`;
-  let links = '';
-  if (item.rec) links += `<button class="link-plate" onclick="openReaderMock(${item.rec},'results')">🎙 Есть расшифровка — читать</button>`;
-  if (item.src) links += `<button class="link-plate msg" onclick="openReaderMock(${item.src},'results')">💬 Исходное аудио-сообщение #${item.src}</button>`;
-  $('rd-linked').innerHTML = links;
-  const coms = item.comments || [];
-  $('rd-comments').innerHTML = coms.length
-    ? `<div class="rd-com-h">💬 Комментарии (${coms.length})</div>` + coms.map(c =>
-        `<div class="comment-row"><span class="c-author">${esc(c.author)}</span><span class="c-date">${esc(c.date)}</span><div class="c-text">${highlight(c.text, tokens)}</div></div>`).join('')
-    : '';
-  const shelfItems = mockDb.items.filter(i=>i.shelf===item.shelf).sort((x,y)=> x.d.localeCompare(y.d));
-  const idx = shelfItems.findIndex(i=>i.id===item.id);
-  const prev = shelfItems[idx-1], next = shelfItems[idx+1];
-  $('rn-prev').disabled = !prev; $('rn-next').disabled = !next;
-  $('rn-prev-t').textContent = prev ? `#${prev.id} · ${prev.date.split(',')[0]}` : '';
-  $('rn-next-t').textContent = next ? `#${next.id} · ${next.date.split(',')[0]}` : '';
-  $('rn-prev').dataset.id = prev?.id ?? ''; $('rn-next').dataset.id = next?.id ?? '';
+  $('rd-title').textContent = (isVoice ? 'Запись' : 'Сообщение') + ' #' + p.message_id;
+  $('rd-recplate').style.display = isVoice ? 'inline-flex' : 'none';
+  $('rd-ava').textContent = (p.author||'@?').replace('@','')[0].toUpperCase();
+  $('rd-author').textContent = p.author || '—';
+  $('rd-date').textContent = formatDateFull(p.date);
+
+  // Текст поста. Для голосового — показываем текст поста + блок расшифровки.
+  let bodyHtml = renderTextWithHighlight(p.text, tokens);
+  if (tr){
+    bodyHtml += `<div class="rd-transcription">
+      <div class="rd-tr-h">🎙 Расшифровка аудио${tr.model_type ? ` <span class="rd-tr-model">(${esc(tr.model_type)})</span>` : ''}</div>
+      <div class="rd-tr-text">${renderTextWithHighlight(tr.text, tokens)}</div>
+    </div>`;
+  }
+  $('rd-body').innerHTML = bodyHtml;
+
+  // Telegram-ссылка
+  if (tg){
+    $('rd-tg').href = tg;
+    $('rd-tg').style.display = 'inline-flex';
+  } else {
+    $('rd-tg').style.display = 'none';
+  }
+  $('rd-linked').innerHTML = '';
+
+  // Комментарии
+  if (coms.length){
+    let html = `<div class="rd-com-h">💬 Комментарии (${cmtTotal})</div>`;
+    html += coms.map(c => {
+      const isTarget = S.readerCommentId && c.message_id === S.readerCommentId;
+      const cls = isTarget ? 'comment-row target' : 'comment-row';
+      return `<div class="${cls}" data-cid="${c.message_id}">
+        <span class="c-author">${esc(c.author||'анон')}</span>
+        <span class="c-date">${esc(formatDateFull(c.date))}</span>
+        <div class="c-text">${renderTextWithHighlight(c.text, tokens)}</div>
+      </div>`;
+    }).join('');
+    $('rd-comments').innerHTML = html;
+  } else {
+    $('rd-comments').innerHTML = '';
+  }
+
+  // Соседи
+  const prev = nb.prev, next = nb.next;
+  $('rn-prev').disabled = !prev;
+  $('rn-next').disabled = !next;
+  $('rn-prev-t').textContent = prev ? `#${prev.message_id} · ${formatDateShort(prev.date)}` : '';
+  $('rn-next-t').textContent = next ? `#${next.message_id} · ${formatDateShort(next.date)}` : '';
+  $('rn-prev').dataset.id = prev ? prev.message_id : '';
+  $('rn-next').dataset.id = next ? next.message_id : '';
+
   showView('reader');
   $('view-reader').scrollTop = 0;
-  const firstMark = $('rd-body').querySelector('mark');
-  if (firstMark) firstMark.scrollIntoView({block:'center'});
+
+  // Прокрутка к целевому комментарию (если пришли из поиска по комментарию)
+  if (S.readerCommentId){
+    setTimeout(() => {
+      const el = document.querySelector(`.comment-row[data-cid="${S.readerCommentId}"]`);
+      if (el){
+        el.scrollIntoView({behavior:'smooth', block:'center'});
+        el.classList.add('flash');
+      } else {
+        // Комментрий не найден — прокрутим к первому <mark>
+        const m = $('rd-body').querySelector('mark') || $('rd-comments').querySelector('mark');
+        if (m) m.scrollIntoView({block:'center'});
+      }
+    }, 100);
+  } else {
+    // Прокрутка к первому подсвеченному фрагменту (если пришли из поиска)
+    const firstMark = $('rd-body').querySelector('mark') || $('rd-comments').querySelector('mark');
+    if (firstMark) firstMark.scrollIntoView({block:'center'});
+  }
 }
+
 function rdNav(dir){
   const id = $(dir<0?'rn-prev':'rn-next').dataset.id;
-  if (id) nav(`#/a/${S.archive.id}/m/${id}`);
+  if (id) openReader(parseInt(id,10), null, S.backCtx && S.backCtx.label && S.backCtx.label.includes('результатам') ? 'results' : 'shelf');
 }
 function goBack(){
   if (S.backCtx) S.backCtx.restore();
   else if (S.archive) nav(`#/a/${S.archive.id}`);
   else nav('#/');
+}
+
+/* ================= ВСПОМОГАТЕЛЬНЫЕ ================= */
+
+/* tokenizeQuery — разбивает запрос на токены для подсветки.
+ * Учитываем, что FTS5 работает по префиксам: «обесценива» подсветит
+ * и «обесценивание», и «обесценивающее». Подсвечиваем по началу слова.
+ */
+function tokenizeQuery(q){
+  return (q||'').toLowerCase().split(/\s+/).filter(t => t.length >= 2);
+}
+function renderTextWithHighlight(text, tokens){
+  const safe = esc(text||'');
+  if (!tokens || !tokens.length) return safe;
+  // Подсветка: ищем начала слов, начинающиеся с токена.
+  // Берём оригинальный текст, экранируем, потом применяем regex по позициям слов.
+  // Простой подход: regex с boundary-подобной группой.
+  try {
+    const re = new RegExp(
+      '(^|[^а-яa-zё0-9])(' +
+      tokens.map(t => t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|') +
+      ')([а-яa-zё0-9]*)',
+      'gi'
+    );
+    return safe.replace(re, (m,pre,tok,rest) => pre + '<mark>' + tok + rest + '</mark>');
+  } catch {
+    return safe;
+  }
+}
+
+/* formatDateShort — '2024-09-15T10:30:00' → '15 сен 2024, 10:30' */
+const _RU_MONTHS_SHORT = ['янв','фев','мар','апр','мая','июн','июл','авг','сен','окт','ноя','дек'];
+function formatDateShort(iso){
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    if (isNaN(d)) return iso.slice(0,16).replace('T',' ');
+    const day = d.getDate();
+    const mon = _RU_MONTHS_SHORT[d.getMonth()];
+    const yr  = d.getFullYear();
+    const hh  = String(d.getHours()).padStart(2,'0');
+    const mm  = String(d.getMinutes()).padStart(2,'0');
+    return `${day} ${mon} ${yr}, ${hh}:${mm}`;
+  } catch { return iso; }
+}
+function formatDateFull(iso){
+  return formatDateShort(iso);
 }
 
 /* ================= ПАНЕЛЬ РАЗРАБОТЧИКА ================= */
@@ -1282,7 +1412,6 @@ function devLog(msg, level=''){
 function dpExec(){
   const v = $('dp-op').value.trim();
   if (!v) return;
-  // Простой парсер: "op archive_id {args json}"
   const m = v.match(/^(\w+)\s+(\S+)?\s*(\{.*\})?\s*$/);
   if (!m){
     devLog(`неверный формат: "op archive_id {json}"`, 'error');
@@ -1312,11 +1441,6 @@ function toast(msg){
   clearTimeout(t._h);
   t._h = setTimeout(()=> t.classList.remove('show'), 2600);
 }
-
-/* Обновить dp-port и статус после hello */
-window.addEventListener('load', () => {
-  // Ничего — обработчик hello обновит
-});
 </script>
 </body>
 </html>

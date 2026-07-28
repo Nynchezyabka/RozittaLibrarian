@@ -218,14 +218,23 @@ async def _handle_op_sync(ws: WebSocket, op: str, archive_id: str, args: dict) -
     if op == "open_archive":
         await _ws_log(ws, f"Открываю архив «{archive_id}» …")
         try:
-            archive = await asyncio.to_thread(core.open_archive, archive_id)
+            archive, chips = await asyncio.to_thread(core.open_archive_with_card, archive_id)
         except Exception as e:
             await _ws_log(ws, f"Не удалось открыть: {e}", level="error")
             raise
         await _ws_log(ws, f"Архив открыт: {archive.passport.title}", level="success")
-        # Возвращаем и card (для оглавления/сводки/чипов), и полный паспорт —
-        # UI сам выберет, что нужно. Полный паспорт нужен для chat_id в ридере.
-        return {"card": archive.to_card_dict(), "passport": archive.to_dict()}
+        # Карточка с динамическими чипами + полный паспорт (для chat_id и т.п.)
+        return {
+            "card": archive.to_card_dict(chips=chips),
+            "passport": archive.to_dict(),
+        }
+
+    if op == "top_terms":
+        # Топ-термины архива для чипов (UI-спец. §9).
+        # Можно вызвать отдельно, если чипы нужно обновить без переоткрытия.
+        limit = int(args.get("limit", 8))
+        terms = await asyncio.to_thread(core.top_terms, archive_id, limit)
+        return {"archive_id": archive_id, "terms": terms}
 
     if op == "search":
         query = (args.get("query") or "").strip()
@@ -233,16 +242,44 @@ async def _handle_op_sync(ws: WebSocket, op: str, archive_id: str, args: dict) -
             await _ws_send(ws, "error", message="Пустой поисковый запрос")
             return None
         await _ws_log(ws, f"Ищу: «{query}» …")
+        # Прокидываем расширенные фильтры (UI-3 «Точный поиск»)
         kwargs = {k: v for k, v in args.items() if k != "query"}
         result = await asyncio.to_thread(core.search, archive_id, query, **kwargs)
+        n = result["count"]
         await _ws_log(
             ws,
-            f"Найдено: {result['count']} (лимит 20)",
-            level="success" if result["count"] > 0 else "warning",
+            f"Найдено: {n} (лимит 20)",
+            level="success" if n > 0 else "warning",
+        )
+        return result
+
+    if op == "get_message":
+        # UI-4 ридер: полное сообщение + комментарии + соседи + t.me одним запросом.
+        message_id = args.get("message_id")
+        if message_id is None:
+            await _ws_send(ws, "error", message="Нужен message_id")
+            return None
+        await _ws_log(ws, f"Открываю сообщение {message_id} …")
+        try:
+            result = await asyncio.to_thread(
+                core.get_message, archive_id,
+                message_id=int(message_id),
+                chat_id=args.get("chat_id"),
+                comment_limit=args.get("comment_limit", 200),
+                comment_offset=args.get("comment_offset", 0),
+            )
+        except ToolError as e:
+            await _ws_log(ws, str(e), level="error")
+            raise
+        await _ws_log(
+            ws,
+            f"Пост от {result['post']['author']} · комментариев: {result['comments']['total']}",
+            level="success",
         )
         return result
 
     if op == "read_post":
+        # Оставлено для совместимости / отладки — UI-4 использует get_message.
         chat_id = args.get("chat_id")
         message_id = args.get("message_id")
         if chat_id is None or message_id is None:

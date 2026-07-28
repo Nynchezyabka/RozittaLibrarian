@@ -71,10 +71,11 @@ class ArchivePassport:
     parser_version: Optional[str] = None
     exported_at: Optional[str] = None
     partial: bool = False        # True, если паспорт собрали из дефолтов
-    # UI-спецификация §3: чипы-примеры под строкой поиска. На Этапе 1 —
-    # из паспорта (вручную прописывает пользователь или парсер); на Этапе 2 —
-    # top_terms будет динамически считать из FTS-словаря.
-    chips: list[str] = field(default_factory=list)
+    # ВАЖНО: поле `chips` УБРАНО из паспорта. Чипы — это данные библиотекаря,
+    # а не парсера: парсер не должен знать, какие слова «важные». Чипы
+    # вычисляются на лету из FTS5-словаря (см. LibrarianDB.top_terms) и
+    # подставляются в карточку при открытии архива.
+    # Поле `chips` в JSON-паспорте (если есть от старых версий) — игнорируется.
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -174,13 +175,19 @@ class Archive:
             "has_librarian_db": self.has_librarian_db,
         }
 
-    def to_card_dict(self) -> dict:
+    def to_card_dict(self, chips: Optional[list[str]] = None) -> dict:
         """
         Карточка архива для экрана 1 (спецификация §2):
         только те поля, что нужны UI для отрисовки карточки.
 
         Полный паспорт остаётся доступен через to_dict()['passport'] —
         UI может вытаскивать оттуда chat_id и т.п. для будущих цитат-ссылок.
+
+        Параметр `chips` — список примеров поисковых слов под строкой
+        поиска. Если None — чипы не подставлены (карточка с экрана 1, где
+        строки поиска ещё нет). Если список — подставляется как есть.
+        Источник чипов — LibrarianDB.top_terms(), вычисляются на лету при
+        открытии архива; парсер их не хранит.
         """
         p = self.passport
         return {
@@ -195,7 +202,7 @@ class Archive:
             "date_from":          p.date_from,
             "date_to":            p.date_to,
             "date_period":        format_date_period(p.date_from, p.date_to),
-            "chips":              list(p.chips),
+            "chips":              list(chips) if chips is not None else [],
             "has_librarian_db":   self.has_librarian_db,
             "partial":            p.partial,
         }
@@ -281,13 +288,8 @@ class ArchiveDiscovery:
             for s in shelves_raw if isinstance(s, dict)
         ]
 
-        # UI-спецификация §3: чипы-примеры под строкой поиска.
-        # Опциональное поле в паспорте — массив строк. Если нет — пустой список,
-        # UI просто не покажет чипы. Не падаем, если поле не того типа.
-        chips_raw = raw.get("chips") or []
-        if not isinstance(chips_raw, list):
-            chips_raw = []
-        chips = [str(c) for c in chips_raw if c][:8]  # не больше 8 на экране
+        # Поле `chips` в паспорте (если осталось от старых версий) — игнорируем.
+        # Чипы теперь вычисляются на стороне библиотекаря через FTS5 top_terms.
 
         return ArchivePassport(
             archive_id=archive_id,
@@ -303,5 +305,4 @@ class ArchiveDiscovery:
             parser_version=raw.get("parser_version"),
             exported_at=raw.get("exported_at"),
             partial=False,
-            chips=chips,
         )

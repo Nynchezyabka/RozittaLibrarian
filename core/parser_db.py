@@ -323,3 +323,59 @@ class ParserDB:
                 (since_iso, limit),
             )
             return [self._row_to_message(r) for r in cur.fetchall()]
+
+    def get_neighbors_by_date(
+        self, chat_id: int, message_id: int, date_iso: str
+    ) -> tuple[Optional[MessageRow], Optional[MessageRow]]:
+        """
+        Соседи сообщения по дате в рамках того же chat_id.
+        Возвращает (prev, next) — предыдущее и следующее сообщения
+        в хронологии чата. Используется ридером для кнопок «← Пред.» / «След. →».
+
+        Логика:
+        - prev — последнее сообщение с date < date_iso (то же chat_id), не является
+          комментарием (чтобы навигация шла по постам, а не прыгала в комментарии);
+        - next — первое сообщение с date > date_iso, не является комментарием.
+        Если у сообщения нет соседей — соответствующая позиция None.
+        """
+        cols = self._message_cols()
+        with self.cursor() as cur:
+            # prev
+            cur.execute(
+                f"SELECT {cols} FROM messages "
+                f"WHERE chat_id = ? AND date < ? AND is_comment = 0 "
+                f"  AND message_id <> ? "
+                f"ORDER BY date DESC LIMIT 1",
+                (chat_id, date_iso, message_id),
+            )
+            r = cur.fetchone()
+            prev = self._row_to_message(r) if r else None
+            # next
+            cur.execute(
+                f"SELECT {cols} FROM messages "
+                f"WHERE chat_id = ? AND date > ? AND is_comment = 0 "
+                f"  AND message_id <> ? "
+                f"ORDER BY date ASC LIMIT 1",
+                (chat_id, date_iso, message_id),
+            )
+            r = cur.fetchone()
+            nxt = self._row_to_message(r) if r else None
+        return prev, nxt
+
+    def get_message_by_message_id_only(self, message_id: int) -> Optional[MessageRow]:
+        """
+        Найти сообщение по message_id без указания chat_id.
+        Используется ридером, когда chat_id берётся из паспорта архива
+        (для упрощения URL: #/a/{id}/m/{message_id}).
+        Если в архиве несколько чатов с одинаковым message_id —
+        возвращается первое совпадение (для демо-архивов это нормально).
+        """
+        cols = self._message_cols()
+        with self.cursor() as cur:
+            cur.execute(
+                f"SELECT {cols} FROM messages WHERE message_id = ? "
+                f"ORDER BY id ASC LIMIT 1",
+                (message_id,),
+            )
+            r = cur.fetchone()
+            return self._row_to_message(r) if r else None
