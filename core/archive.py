@@ -71,10 +71,89 @@ class ArchivePassport:
     parser_version: Optional[str] = None
     exported_at: Optional[str] = None
     partial: bool = False        # True, если паспорт собрали из дефолтов
+    # UI-спецификация §3: чипы-примеры под строкой поиска. На Этапе 1 —
+    # из паспорта (вручную прописывает пользователь или парсер); на Этапе 2 —
+    # top_terms будет динамически считать из FTS-словаря.
+    chips: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = asdict(self)
         return d
+
+
+# ---------------------------------------------------------------------------
+# UI-вспомогательные функции (спецификация §2-3)
+# ---------------------------------------------------------------------------
+
+# Иконка по типу источника (спецификация §2): канал 📚 / группа 💬 / личный чат 👤
+_EMOJI_BY_TYPE = {
+    "channel": "📚",
+    "group":   "💬",
+    "forum":   "💬",
+    "private": "👤",
+}
+
+
+def emoji_for_type(chat_type: Optional[str]) -> str:
+    """Эмодзи для карточки архива по типу источника."""
+    if not chat_type:
+        return "📦"
+    return _EMOJI_BY_TYPE.get(chat_type, "📦")
+
+
+def type_label(chat_type: Optional[str]) -> str:
+    """Человекочитаемый тип источника для карточки/сводки."""
+    return {
+        "channel": "канал",
+        "group":   "группа",
+        "forum":   "форум",
+        "private": "личный чат",
+    }.get(chat_type or "", "архив")
+
+
+def format_date_period(date_from: Optional[str], date_to: Optional[str]) -> str:
+    """
+    Превратить ISO-даты паспорта в человекочитаемый период:
+        '15 сен 2024 — 1 окт 2024'
+    Если даты нет — пустая строка. Если только одна — без тире.
+    """
+    if not date_from and not date_to:
+        return ""
+    parts = []
+    if date_from:
+        parts.append(_humanize_date(date_from))
+    parts.append("—")
+    if date_to:
+        parts.append(_humanize_date(date_to))
+    if not date_from:
+        # только date_to
+        return parts[1] + " " + parts[2]
+    if not date_to:
+        return parts[0] + " —"
+    return " ".join(parts)
+
+
+_RU_MONTHS_SHORT = [
+    "янв", "фев", "мар", "апр", "мая", "июн",
+    "июл", "авг", "сен", "окт", "ноя", "дек",
+]
+
+
+def _humanize_date(iso: str) -> str:
+    """
+    '2024-09-15T10:30:00' → '15 сен 2024'
+    Любой сбой → вернуть исходную строку обрезанной.
+    """
+    try:
+        # Берём только дату, игнорируем время.
+        date_part = iso.split("T")[0]
+        y, m, d = date_part.split("-")
+        m_idx = int(m) - 1
+        if m_idx < 0 or m_idx > 11:
+            return date_part
+        return f"{int(d)} {_RU_MONTHS_SHORT[m_idx]} {y}"
+    except Exception:
+        return (iso or "")[:10] or "—"
 
 
 @dataclass
@@ -93,6 +172,32 @@ class Archive:
             "passport": self.passport.to_dict(),
             "parser_db_path": str(self.parser_db_path),
             "has_librarian_db": self.has_librarian_db,
+        }
+
+    def to_card_dict(self) -> dict:
+        """
+        Карточка архива для экрана 1 (спецификация §2):
+        только те поля, что нужны UI для отрисовки карточки.
+
+        Полный паспорт остаётся доступен через to_dict()['passport'] —
+        UI может вытаскивать оттуда chat_id и т.п. для будущих цитат-ссылок.
+        """
+        p = self.passport
+        return {
+            "id":                 self.id,
+            "emoji":              emoji_for_type(p.chat_type),
+            "title":              p.title or self.id,
+            "username":           p.username,
+            "chat_type":          p.chat_type,
+            "type_label":         type_label(p.chat_type),
+            "messages_count":     p.messages_count,
+            "transcriptions_count": p.transcriptions_count,
+            "date_from":          p.date_from,
+            "date_to":            p.date_to,
+            "date_period":        format_date_period(p.date_from, p.date_to),
+            "chips":              list(p.chips),
+            "has_librarian_db":   self.has_librarian_db,
+            "partial":            p.partial,
         }
 
 
@@ -176,6 +281,14 @@ class ArchiveDiscovery:
             for s in shelves_raw if isinstance(s, dict)
         ]
 
+        # UI-спецификация §3: чипы-примеры под строкой поиска.
+        # Опциональное поле в паспорте — массив строк. Если нет — пустой список,
+        # UI просто не покажет чипы. Не падаем, если поле не того типа.
+        chips_raw = raw.get("chips") or []
+        if not isinstance(chips_raw, list):
+            chips_raw = []
+        chips = [str(c) for c in chips_raw if c][:8]  # не больше 8 на экране
+
         return ArchivePassport(
             archive_id=archive_id,
             title=raw.get("title") or archive_id,
@@ -190,4 +303,5 @@ class ArchiveDiscovery:
             parser_version=raw.get("parser_version"),
             exported_at=raw.get("exported_at"),
             partial=False,
+            chips=chips,
         )

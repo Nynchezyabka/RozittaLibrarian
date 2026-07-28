@@ -50,7 +50,16 @@ class LibrarianCore:
         return self._discovery.list_archives()
 
     def list_archives_as_dict(self) -> list[dict]:
+        """Полные словари архивов (включая паспорт целиком)."""
         return [a.to_dict() for a in self.list_archives()]
+
+    def list_archives_as_cards(self) -> list[dict]:
+        """
+        Карточки архивов для экрана 1 (UI-спецификация §2).
+        Только поля, нужные для отрисовки карточки: emoji, title, username,
+        тип, счётчики, период, чипы. Без путей и без внутренних id баз.
+        """
+        return [a.to_card_dict() for a in self.list_archives()]
 
     def open_archive(self, archive_id: str) -> Archive:
         """

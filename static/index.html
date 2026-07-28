@@ -4,8 +4,7 @@
 <meta charset="UTF-8">
 <meta name="color-scheme" content="dark">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rozitta Librarian — Поиск и чтение архивов</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<title>Rozitta Librarian — Читальный зал</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -16,7 +15,6 @@
     --surface-hov:   rgba(255,255,255,0.10);
     --border:        rgba(255,255,255,0.10);
     --text:          #F0F0F0;
-    --fg:            #F0F0F0;
     --text-sec:      #BBBBBB;
     --text-ter:      rgba(255,255,255,0.40);
     --orange:        #FF9500;
@@ -26,7 +24,6 @@
     --success:       #00C853;
     --success-soft:  rgba(0,200,83,0.15);
     --error:         #FF4D4D;
-    --error-soft:    rgba(255,77,77,0.15);
     --warning:       #FFAA00;
     --warning-soft:  rgba(255,170,0,0.15);
     --shadow:        0 8px 32px rgba(0,0,0,0.45);
@@ -42,991 +39,1284 @@ body {
     -webkit-font-smoothing: antialiased;
     min-height: 100vh;
 }
+button { font-family: 'Inter', sans-serif; }
+.mono { font-family: 'JetBrains Mono', monospace; }
 
 .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
 /* ===== HEADER ===== */
 .header {
-    display: flex; align-items: center; justify-content: space-between;
+    display: flex; align-items: center; gap: 16px;
     padding: 0 18px; height: 52px; flex-shrink: 0;
     background: rgba(22,22,22,0.85);
     backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
     border-bottom: 1px solid var(--border);
-    position: sticky; top: 0; z-index: 100;
+    z-index: 100;
 }
-.logo { display: flex; align-items: center; gap: 9px; }
+.logo { display: flex; align-items: center; gap: 9px; cursor: pointer; user-select: none; }
 .logo-mark {
     width: 26px; height: 26px; border-radius: 7px;
     background: linear-gradient(135deg, var(--pink), var(--orange));
-    display: grid; place-items: center; color: #fff; font-size: 0.8rem; flex-shrink: 0;
+    display: grid; place-items: center; font-size: 0.85rem; flex-shrink: 0;
 }
+.logo-mark svg { width: 15px; height: 15px; display: block; }
 .logo-text {
     font-size: 1.05rem; font-weight: 700; letter-spacing: -0.02em;
     background: linear-gradient(135deg, var(--pink), var(--orange));
     -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-.logo-sub { font-size: 0.66rem; color: var(--text-sec); font-weight: 500; display: block; line-height: 1.1; }
-
-.header-right { display: flex; align-items: center; gap: 8px; }
-.status-pill {
-    display: flex; align-items: center; gap: 7px;
-    font-size: 0.76rem; color: var(--text-sec);
+.crumb {
+    display: none; align-items: center; gap: 6px;
+    font-size: 0.8rem; color: var(--text-sec);
     background: var(--surface); border: 1px solid var(--border);
-    border-radius: 20px; padding: 4px 11px; backdrop-filter: blur(8px);
+    border-radius: 20px; padding: 5px 13px; cursor: pointer; transition: var(--t);
+    border: 1px solid var(--border);
 }
-.status-pill .port { font-family: 'JetBrains Mono', monospace; color: var(--orange); font-size: 0.7rem; }
-.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 6px var(--success); flex-shrink: 0; }
-.status-dot.busy { background: var(--warning); box-shadow: 0 0 6px var(--warning); animation: blink 1.2s infinite; }
-.status-dot.error { background: var(--error); box-shadow: 0 0 6px var(--error); }
-@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
-
-/* ===== MOCK BANNER ===== */
-.mock-banner {
-    background: var(--warning-soft); border-bottom: 1px solid rgba(255,170,0,0.3);
-    color: var(--warning); font-size: 0.7rem;
-    padding: 4px 16px; display: flex; align-items: center; gap: 7px; flex-shrink: 0;
-}
-.mock-banner i { font-size: 0.68rem; }
-.mock-banner b { font-weight: 600; }
-.mock-banner.success { background: var(--success-soft); border-bottom-color: rgba(0,200,83,0.3); color: var(--success); }
-.mock-banner.error { background: var(--error-soft); border-bottom-color: rgba(255,77,77,0.3); color: var(--error); }
-
-/* ===== WORKSPACE (3 cols) ===== */
-.workspace {
-    flex: 1; display: grid; grid-template-columns: 340px 1fr 320px; gap: 14px;
-    padding: 14px 18px; min-height: 0; overflow: hidden;
-}
-.col { display: flex; flex-direction: column; min-width: 0; }
-
-/* LEFT: archives + search form (scrollable) */
-.col-left { max-height: calc(100vh - 52px - 28px - 28px); overflow-y: auto; padding-right: 4px; scrollbar-width: thin; scrollbar-color: rgba(255,149,0,0.4) transparent; gap: 14px; }
-.col-left::-webkit-scrollbar { width: 4px; }
-.col-left::-webkit-scrollbar-thumb { background: rgba(255,149,0,0.4); border-radius: 2px; }
-.col-left > .card { flex: 0 0 auto; }
-
-/* MID: search results (top) + post view (bottom, stretched) */
-.col-mid { gap: 14px; overflow: hidden; min-height: 0; }
-.col-mid > .card { flex: 1; min-height: 0; }
-
-/* RIGHT: avatar + explanations + logs */
-.col-right-panel {
-    background: rgba(16,16,16,0.45); border: 1px solid var(--border);
-    border-radius: var(--r); box-shadow: var(--shadow);
-    overflow: hidden; display: flex; flex-direction: column; min-height: 0;
-}
-.char-wrap {
-    padding: 18px 14px 14px; background: rgba(0,0,0,0.12);
-    border-bottom: 1px solid var(--border); flex-shrink: 0;
-    display: flex; flex-direction: column; align-items: center; gap: 7px;
-}
-.frog-avatar {
-    width: 80px; height: 80px; border-radius: 50%;
-    overflow: hidden; flex-shrink: 0;
-    border: 2px solid var(--pink);
-    box-shadow: 0 0 14px rgba(255,107,201,0.20);
-    cursor: pointer; transition: var(--t);
+.crumb:hover { background: var(--surface-hov); color: var(--text); }
+.crumb.visible { display: inline-flex; }
+.hdr-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.hdr-icon {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--text-sec); font-size: 0.95rem; cursor: pointer; transition: var(--t);
     display: grid; place-items: center;
+}
+.hdr-icon:hover { background: var(--surface-hov); color: var(--orange); border-color: rgba(255,149,0,0.4); }
+.conn-warn {
+    display: none; align-items: center; gap: 7px;
+    font-size: 0.74rem; color: var(--error);
+}
+.conn-warn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--error); box-shadow: 0 0 6px var(--error); }
+
+/* ===== LAYOUT ===== */
+.stage { flex: 1; min-height: 0; overflow: hidden; display: flex; }
+.screen { flex: 1; min-height: 0; display: none; }
+.screen.active { display: flex; }
+
+/* ===== SCREEN 1: HOME ===== */
+#screen-home { flex-direction: column; overflow-y: auto; padding: 34px clamp(18px, 5vw, 60px); scrollbar-width: thin; scrollbar-color: rgba(255,149,0,0.4) transparent; }
+.home-title { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 4px; }
+.home-sub { font-size: 0.84rem; color: var(--text-sec); }
+.home-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 24px; }
+.home-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.btn-add {
+    padding: 9px 16px; border: 1px solid var(--orange); border-radius: var(--rsm);
+    background: var(--orange); color: #1a1a1a; font-size: 0.82rem; font-weight: 600;
+    cursor: pointer; transition: var(--t);
+}
+.btn-add:hover { filter: brightness(1.08); }
+.btn-ghost {
+    padding: 9px 14px; border: 1px solid var(--border); border-radius: var(--rsm);
+    background: rgba(0,0,0,0.2); color: var(--text-sec); font-size: 0.82rem;
+    cursor: pointer; transition: var(--t);
+}
+.btn-ghost:hover { background: var(--surface-hov); color: var(--text); }
+.arch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.arch-card {
+    background: var(--surface); backdrop-filter: blur(14px);
+    border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow);
+    padding: 18px; cursor: pointer; transition: var(--t);
+    display: flex; flex-direction: column; gap: 8px;
+}
+.arch-card:hover { background: var(--surface-hov); border-color: rgba(255,149,0,0.4); transform: translateY(-2px); }
+.arch-card .ac-emoji { font-size: 1.5rem; }
+.arch-card .ac-name { font-size: 1.02rem; font-weight: 600; }
+.arch-card .ac-handle { font-size: 0.76rem; color: var(--text-sec); }
+.arch-card .ac-handle code { font-family: 'JetBrains Mono', monospace; color: var(--orange); font-size: 0.72rem; }
+.arch-card .ac-counts { font-size: 0.78rem; color: var(--text-sec); }
+.arch-card .ac-dates { font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; color: var(--text-ter); }
+.arch-card .ac-open {
+    margin-top: 6px; align-self: flex-end;
+    font-size: 0.78rem; font-weight: 600; color: var(--orange);
+    display: inline-flex; align-items: center; gap: 5px;
+}
+.arch-card:hover .ac-open { text-decoration: underline; }
+
+/* ===== SCREEN 2-4: ARCHIVE WORKSPACE ===== */
+#screen-archive { gap: 14px; padding: 14px 18px; }
+.sidebar {
+    width: 250px; flex-shrink: 0; display: flex; flex-direction: column; gap: 14px;
+    overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(255,149,0,0.4) transparent;
+}
+.side-card {
+    background: var(--surface); backdrop-filter: blur(14px);
+    border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow);
+    padding: 14px; flex-shrink: 0;
+}
+.side-arch-name { font-size: 0.94rem; font-weight: 700; line-height: 1.35; margin-bottom: 12px; display: flex; gap: 8px; align-items: flex-start; }
+.side-arch-name .em { font-size: 1.1rem; line-height: 1.2; }
+.toc-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-radius: var(--rsm); cursor: pointer; transition: var(--t);
+    font-size: 0.84rem; color: var(--text-sec);
+}
+.toc-item:hover { background: var(--surface-hov); color: var(--text); }
+.toc-item.active { background: var(--orange-soft); color: var(--orange); font-weight: 600; }
+.toc-item .cnt {
+    margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 0.68rem;
+    background: rgba(0,0,0,0.25); border: 1px solid var(--border);
+    padding: 1px 8px; border-radius: 20px; color: var(--text-sec);
+}
+.toc-item.active .cnt { color: var(--orange); border-color: rgba(255,149,0,0.3); }
+.side-sec-label { font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-ter); margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+.side-sec-label .q {
+    margin-left: auto; width: 15px; height: 15px; border-radius: 50%;
+    border: 1px solid var(--border); color: var(--text-ter);
+    display: grid; place-items: center; font-size: 0.6rem; cursor: help; text-transform: none;
+}
+.sum-row { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; font-size: 0.76rem; }
+.sum-row .k { color: var(--text-sec); }
+.sum-row .v { font-family: 'JetBrains Mono', monospace; color: var(--orange); text-align: right; }
+
+/* Rozitta */
+.rozitta { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0 4px; flex-shrink: 0; position: relative; }
+.rz-bubble {
+    position: relative; width: 100%;
+    background: var(--pink-soft); border: 1px solid rgba(255,107,201,0.3);
+    border-radius: var(--r); padding: 11px 26px 11px 13px;
+    font-size: 0.76rem; line-height: 1.5; color: var(--text);
+    animation: rz-in 0.3s ease;
+}
+@keyframes rz-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+.rz-bubble::after {
+    content: ''; position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%) rotate(45deg);
+    width: 10px; height: 10px; background: #3a2b35;
+    border-right: 1px solid rgba(255,107,201,0.3); border-bottom: 1px solid rgba(255,107,201,0.3);
+}
+.rz-close {
+    position: absolute; top: 6px; right: 7px; background: none; border: none;
+    color: var(--text-ter); cursor: pointer; font-size: 0.8rem; line-height: 1; padding: 2px;
+}
+.rz-close:hover { color: var(--pink); }
+.rz-avatar {
+    width: 160px; height: 160px; border-radius: 50%;
+    border: 2px solid var(--pink); box-shadow: 0 0 20px rgba(255,107,201,0.20);
     background: linear-gradient(135deg, rgba(255,107,201,0.2), rgba(255,149,0,0.1));
-    font-size: 2.4rem;
+    display: grid; place-items: center; font-size: 4.8rem; cursor: pointer; transition: var(--t);
 }
-.frog-avatar:hover { transform: scale(1.08); box-shadow: 0 0 24px rgba(255,107,201,0.35); }
-.frog-avatar:active { transform: scale(0.96); }
-.frog-avatar.croaking { animation: croak-bounce 0.4s ease; }
-@keyframes croak-bounce { 0%,100%{transform:scale(1)} 30%{transform:scale(1.12)} 60%{transform:scale(0.95)} }
-.char-name { font-size: 0.86rem; font-weight: 600; color: var(--pink); }
-.char-hint { font-size: 0.64rem; color: var(--text-sec); text-align: center; line-height: 1.4; }
-.right-explanations { padding: 12px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-.right-explanations .safety-note { margin-top: 0; }
-.right-logs { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.right-logs-head {
-    padding: 12px 14px 8px; font-size: 0.84rem; font-weight: 600;
-    color: var(--text); display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+.rz-avatar:hover { transform: scale(1.08); box-shadow: 0 0 24px rgba(255,107,201,0.35); }
+.rz-name { font-size: 0.74rem; font-weight: 600; color: var(--pink); }
+.rozitta.home-mode { margin: 34px auto 0; max-width: 340px; }
+
+/* Content column */
+.content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.search-bar {
+    background: var(--surface); backdrop-filter: blur(14px);
+    border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow);
+    padding: 14px; flex-shrink: 0;
 }
-.right-logs-head i {
-    background: var(--orange-soft); color: var(--orange);
-    padding: 5px 6px; border-radius: 6px; font-size: 0.78rem;
+.search-row { display: flex; gap: 8px; }
+.search-inp-wrap { position: relative; flex: 1; }
+.search-inp-wrap .ico {
+    position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+    color: var(--orange); font-size: 0.95rem; pointer-events: none;
 }
-.right-logs-head .clear-btn { margin-left: auto; font-size: 0.68rem; color: var(--text-sec); background: none; border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; cursor: pointer; }
-.right-logs-head .clear-btn:hover { color: var(--text); background: var(--surface-hov); }
-.right-logs-body {
-    flex: 1; overflow-y: auto; padding: 0 14px 14px;
-    font-family: "JetBrains Mono", monospace; font-size: 0.72rem;
-    line-height: 1.6; color: var(--text-sec);
+#q-input {
+    width: 100%; padding: 12px 14px 12px 40px;
+    background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: var(--rsm);
+    color: var(--text); font-size: 0.95rem; font-family: 'Inter', sans-serif; transition: var(--t);
+}
+#q-input:focus { outline: none; border-color: var(--orange); box-shadow: 0 0 0 3px var(--orange-soft); }
+#q-input::placeholder { color: var(--text-ter); }
+.btn-search {
+    padding: 0 22px; border: 1px solid var(--orange); border-radius: var(--rsm);
+    background: var(--orange); color: #1a1a1a; font-size: 0.88rem; font-weight: 600;
+    cursor: pointer; transition: var(--t);
+}
+.btn-search:hover { filter: brightness(1.08); }
+.search-under { display: flex; align-items: center; gap: 7px; margin-top: 10px; flex-wrap: wrap; }
+.chip-label { font-size: 0.72rem; color: var(--text-ter); }
+.chip {
+    font-size: 0.74rem; padding: 4px 12px; border-radius: 20px;
+    border: 1px solid rgba(255,149,0,0.3); background: var(--orange-soft); color: var(--orange);
+    cursor: pointer; transition: var(--t);
+}
+.chip:hover { filter: brightness(1.2); }
+.adv-toggle {
+    margin-left: auto; background: none; border: none; cursor: pointer;
+    font-size: 0.74rem; color: var(--text-sec); display: inline-flex; align-items: center; gap: 5px;
+}
+.adv-toggle:hover { color: var(--text); }
+.adv-toggle .arr { transition: var(--t); display: inline-block; }
+.adv-toggle.open .arr { transform: rotate(180deg); }
+.adv-panel { display: none; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border); grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.adv-panel.open { display: grid; }
+.adv-panel label { display: block; font-size: 0.7rem; color: var(--text-sec); margin-bottom: 4px; }
+.adv-panel input {
+    width: 100%; padding: 8px 10px; background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border); border-radius: var(--rsm);
+    color: var(--text); font-size: 0.78rem; font-family: 'Inter', sans-serif;
+}
+.adv-panel input:focus { outline: none; border-color: var(--orange); }
+
+/* Content views */
+.view {
+    flex: 1; min-height: 0; overflow-y: auto;
+    background: var(--surface); backdrop-filter: blur(14px);
+    border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow);
+    padding: 20px; display: none;
     scrollbar-width: thin; scrollbar-color: rgba(255,149,0,0.5) transparent;
 }
-.right-logs-body::-webkit-scrollbar { width: 5px; }
-.right-logs-body::-webkit-scrollbar-thumb { background: rgba(255,149,0,0.5); border-radius: 3px; }
-.log-line { padding: 2px 0; display: flex; gap: 6px; align-items: flex-start; }
-.log-line .ts { color: var(--text-ter); flex-shrink: 0; }
-.log-line .msg { flex: 1; word-break: break-word; }
-.log-line.info .msg { color: var(--text-sec); }
-.log-line.success .msg { color: var(--success); }
-.log-line.warning .msg { color: var(--warning); }
-.log-line.error .msg { color: var(--error); }
+.view::-webkit-scrollbar { width: 5px; }
+.view::-webkit-scrollbar-thumb { background: rgba(255,149,0,0.5); border-radius: 3px; }
+.view.active { display: block; }
 
-/* ===== CARDS ===== */
-.card {
-    background: var(--surface); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
-    border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow);
-    display: flex; flex-direction: column; min-height: 0; flex: 1;
-}
-.card-head {
-    padding: 14px 18px; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap;
-}
-.card-title { font-size: 0.92rem; font-weight: 600; display: flex; align-items: center; gap: 8px; }
-.card-title i { background: var(--orange-soft); color: var(--orange); padding: 5px 6px; border-radius: 6px; font-size: 0.82rem; }
-.count-chips { margin-left: auto; display: flex; gap: 5px; flex-wrap: wrap; }
-.cnt {
-    display: inline-flex; align-items: center; gap: 4px;
-    font-size: 0.66rem; font-weight: 600; padding: 3px 8px; border-radius: 20px;
-    border: 1px solid var(--border); background: rgba(0,0,0,0.25);
-}
-.cnt i { font-size: 0.58rem; }
-.cnt.green { color: var(--success); border-color: rgba(0,200,83,0.3); background: var(--success-soft); }
-.cnt.orange { color: var(--warning); border-color: rgba(255,170,0,0.3); background: var(--warning-soft); }
-.cnt.gray { color: var(--text-sec); }
-.cnt.red { color: var(--error); border-color: rgba(255,77,77,0.3); background: var(--error-soft); }
-.cnt.pink { color: var(--pink); border-color: rgba(255,107,201,0.3); background: var(--pink-soft); }
+.v-title { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; }
+.v-sub { font-size: 0.8rem; color: var(--text-sec); margin: 4px 0 20px; }
+.sec-h { font-size: 0.82rem; font-weight: 600; color: var(--text-sec); margin: 0 0 10px; display: flex; align-items: center; gap: 7px; }
 
-.card-body { flex: 1; overflow-y: auto; padding: 12px; scrollbar-width: thin; scrollbar-color: rgba(255,149,0,0.5) transparent; }
-.card-body::-webkit-scrollbar { width: 5px; }
-.card-body::-webkit-scrollbar-thumb { background: rgba(255,149,0,0.5); border-radius: 3px; }
-
-/* ===== FIELDS, INPUTS ===== */
-.field { margin-bottom: 12px; }
-.field:last-child { margin-bottom: 0; }
-.field label {
-    display: flex; align-items: center; gap: 6px;
-    font-size: 0.78rem; color: var(--text-sec); margin-bottom: 5px; font-weight: 500;
-}
-.field label .opt { font-size: 0.66rem; color: rgba(255,255,255,0.35); font-weight: 400; margin-left: auto; }
-.inp-wrap { position: relative; }
-.inp-wrap input, .inp-wrap select, .inp-wrap textarea {
-    width: 100%; padding: 9px 11px;
-    background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: var(--rsm);
-    color: var(--text); font-size: 0.84rem; font-family: 'Inter', sans-serif; transition: var(--t);
-}
-.inp-wrap input.mono { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; }
-.inp-wrap input:focus, .inp-wrap select:focus, .inp-wrap textarea:focus {
-    outline: none; border-color: var(--orange); box-shadow: 0 0 0 3px var(--orange-soft);
-}
-.inp-wrap.has-icon-left input { padding-left: 34px; }
-.inp-wrap .ico-left { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--orange); font-size: 0.82rem; pointer-events: none; }
-.inp-wrap .ico-right { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--text-sec); font-size: 0.82rem; cursor: pointer; }
-.inp-wrap .ico-right:hover { color: var(--orange); }
-
-/* buttons */
-.btn {
-    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-    padding: 9px 14px; border: 1px solid var(--border); border-radius: var(--rsm);
-    background: rgba(0,0,0,0.3); color: var(--text); font-size: 0.84rem; font-weight: 500;
-    font-family: 'Inter', sans-serif; cursor: pointer; transition: var(--t);
-}
-.btn:hover { background: var(--surface-hov); }
-.btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn-primary { background: var(--orange); border-color: var(--orange); color: #fff; font-weight: 600; }
-.btn-primary:hover { background: #e08500; border-color: #e08500; }
-.btn-ghost-danger { color: var(--error); border-color: rgba(255,77,77,0.3); }
-.btn-ghost-danger:hover { background: var(--error-soft); }
-.btn-block { width: 100%; }
-.btn-lg { padding: 11px 16px; font-size: 0.88rem; }
-.btn-sm { font-size: 0.72rem; padding: 5px 11px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 5px; transition: var(--t); }
-.btn-sm:hover { background: var(--surface-hov); }
-.btn-sm.primary { background: var(--orange); color: #1a1a1a; border-color: var(--orange); font-weight: 600; }
-.btn-sm.primary:hover { filter: brightness(1.08); }
-.btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
-
-.safety-note {
-    margin-top: 12px; padding: 9px 11px; border: 1px dashed rgba(0,200,83,0.25); border-radius: var(--rsm);
-    background: rgba(0,200,83,0.05); font-size: 0.7rem; color: var(--text-sec); line-height: 1.55;
-}
-.safety-note i { color: var(--success); }
-.safety-note b { color: var(--success); }
-.safety-note code { font-family: 'JetBrains Mono', monospace; color: var(--orange); }
-
-/* ===== ARCHIVE CARDS ===== */
-.archive-card {
-    padding: 11px 13px; border: 1px solid var(--border); border-radius: var(--rsm);
+.msg-card {
+    padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--rsm);
     background: rgba(0,0,0,0.18); cursor: pointer; transition: var(--t);
 }
-.archive-card + .archive-card { margin-top: 7px; }
-.archive-card:hover { background: rgba(0,0,0,0.28); border-color: rgba(255,255,255,0.18); }
-.archive-card.active { border-color: rgba(255,149,0,0.5); box-shadow: 0 0 0 1px rgba(255,149,0,0.3) inset; background: var(--orange-soft); }
-.archive-card .ac-title { font-size: 0.84rem; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 6px; }
-.archive-card .ac-title i { color: var(--orange); font-size: 0.78rem; }
-.archive-card .ac-meta { font-size: 0.66rem; color: var(--text-sec); margin-top: 4px; display: flex; flex-wrap: wrap; gap: 8px; }
-.archive-card .ac-meta span { display: inline-flex; align-items: center; gap: 3px; }
-.archive-card .ac-meta code { font-family: 'JetBrains Mono', monospace; background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 4px; font-size: 0.64rem; }
-
-/* ===== SEARCH RESULTS ===== */
-.empty-state {
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    padding: 50px 20px; text-align: center; color: var(--text-ter);
+.msg-card + .msg-card { margin-top: 8px; }
+.msg-card:hover { background: rgba(0,0,0,0.28); border-color: rgba(255,255,255,0.18); }
+.mc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.mc-id { font-size: 0.76rem; font-weight: 600; color: var(--orange); }
+.mc-date { font-family: 'JetBrains Mono', monospace; font-size: 0.66rem; color: var(--text-sec); }
+.mc-shelf {
+    margin-left: auto; font-size: 0.62rem; padding: 1px 8px; border-radius: 12px;
+    background: var(--orange-soft); color: var(--orange); border: 1px solid rgba(255,149,0,0.3);
 }
-.empty-state i { font-size: 2rem; margin-bottom: 10px; opacity: 0.5; }
-.empty-title { font-size: 0.92rem; font-weight: 600; color: var(--text-sec); margin-bottom: 4px; }
-.empty-desc { font-size: 0.74rem; line-height: 1.55; max-width: 380px; }
+.mc-shelf.rec { background: var(--pink-soft); color: var(--pink); border-color: rgba(255,107,201,0.3); }
+.mc-text { font-size: 0.82rem; line-height: 1.55; color: var(--text-sec); }
+.mc-read { margin-top: 7px; font-size: 0.74rem; font-weight: 600; color: var(--orange); text-align: right; }
+mark { background: var(--orange-soft); color: var(--orange); padding: 0 3px; border-radius: 3px; font-weight: 600; }
 
-.search-result {
-    padding: 11px 13px; border: 1px solid var(--border); border-radius: var(--rsm);
-    background: rgba(0,0,0,0.18); cursor: pointer; transition: var(--t);
-}
-.search-result + .search-result { margin-top: 7px; }
-.search-result:hover { background: rgba(0,0,0,0.28); border-color: rgba(255,255,255,0.18); }
-.search-result .sr-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; flex-wrap: wrap; }
-.search-result .sr-author { font-size: 0.78rem; font-weight: 600; color: var(--orange); }
-.search-result .sr-date { font-family: 'JetBrains Mono', monospace; font-size: 0.66rem; color: var(--text-sec); }
-.search-result .sr-source { font-size: 0.62rem; padding: 1px 7px; border-radius: 12px; background: var(--pink-soft); color: var(--pink); border: 1px solid rgba(255,107,201,0.3); margin-left: auto; }
-.search-result .sr-source.message { background: var(--orange-soft); color: var(--orange); border-color: rgba(255,149,0,0.3); }
-.search-result .sr-snippet { font-size: 0.82rem; line-height: 1.55; color: var(--text-sec); }
-.search-result .sr-snippet .hl { background: var(--orange-soft); color: var(--orange); padding: 0 3px; border-radius: 3px; font-weight: 600; }
+.results-count { font-size: 0.86rem; color: var(--text); margin-bottom: 14px; }
+.results-count b { color: var(--orange); }
+.no-results { text-align: center; padding: 40px 20px; color: var(--text-ter); font-size: 0.84rem; }
+.no-results .big { font-size: 2rem; margin-bottom: 10px; }
 
-/* ===== POST VIEW ===== */
-.post-view { padding: 4px 0; }
-.post-header {
-    padding: 12px 14px; border-bottom: 1px solid var(--border);
-    display: flex; flex-direction: column; gap: 6px;
+/* Reader */
+.reader-back {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: none; border: 1px solid var(--border); border-radius: 20px;
+    padding: 6px 14px; color: var(--text-sec); font-size: 0.78rem; cursor: pointer;
+    transition: var(--t); margin-bottom: 18px;
 }
-.post-author-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
-.post-avatar {
-    width: 32px; height: 32px; border-radius: 50%;
+.reader-back:hover { background: var(--surface-hov); color: var(--text); }
+.reader-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.reader-title { font-size: 1.1rem; font-weight: 700; }
+.reader-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.reader-author {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 0.84rem; font-weight: 600; color: var(--orange);
+}
+.reader-ava {
+    width: 30px; height: 30px; border-radius: 50%;
     background: linear-gradient(135deg, var(--pink), var(--orange));
-    display: grid; place-items: center; color: #fff; font-size: 0.78rem; font-weight: 700; flex-shrink: 0;
+    display: grid; place-items: center; color: #fff; font-size: 0.72rem; font-weight: 700;
 }
-.post-author { font-size: 0.88rem; font-weight: 600; color: var(--orange); }
-.post-date { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: var(--text-sec); }
-.post-meta-chips { display: flex; gap: 5px; flex-wrap: wrap; }
-.post-body {
-    padding: 14px 16px; font-size: 0.86rem; line-height: 1.7;
-    color: var(--text); white-space: pre-wrap; word-break: break-word;
+.reader-date { font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: var(--text-sec); }
+.reader-body { font-size: 0.92rem; line-height: 1.75; white-space: pre-wrap; word-break: break-word; }
+.rec-plate {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 0.72rem; font-weight: 600; color: var(--pink);
+    background: var(--pink-soft); border: 1px dashed rgba(255,107,201,0.35);
+    border-radius: 20px; padding: 4px 12px;
 }
-.post-body .hl { background: var(--orange-soft); color: var(--orange); padding: 0 3px; border-radius: 3px; }
-.post-transcription {
-    margin: 0 16px 12px; padding: 11px 13px;
-    border: 1px dashed rgba(255,107,201,0.35); border-radius: var(--rsm);
-    background: var(--pink-soft); font-size: 0.8rem; line-height: 1.65; color: var(--text-sec);
+.reader-tg {
+    display: inline-flex; align-items: center; gap: 6px; margin-top: 18px;
+    font-size: 0.78rem; color: var(--text-sec); text-decoration: none;
+    border: 1px solid var(--border); border-radius: 20px; padding: 6px 14px; transition: var(--t);
 }
-.post-transcription .tr-label { display: flex; align-items: center; gap: 6px; font-size: 0.7rem; font-weight: 600; color: var(--pink); margin-bottom: 6px; }
-.post-transcription .tr-label code { font-family: 'JetBrains Mono', monospace; background: rgba(255,107,201,0.15); padding: 1px 5px; border-radius: 4px; font-size: 0.64rem; }
+.reader-tg:hover { color: var(--orange); border-color: rgba(255,149,0,0.4); }
+.reader-nav { display: flex; justify-content: space-between; gap: 10px; margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--border); }
+.rn-btn {
+    background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: var(--rsm);
+    padding: 9px 14px; color: var(--text-sec); font-size: 0.76rem; cursor: pointer;
+    transition: var(--t); max-width: 46%; text-align: left;
+}
+.rn-btn:hover:not(:disabled) { background: var(--surface-hov); color: var(--text); }
+.rn-btn:disabled { opacity: 0.3; cursor: default; }
+.rn-btn .rn-dir { font-size: 0.64rem; color: var(--text-ter); display: block; margin-bottom: 2px; }
+.rn-btn.next { text-align: right; }
 
-.comments-section { padding: 0 16px 16px; }
-.comments-head { font-size: 0.78rem; font-weight: 600; color: var(--text-sec); margin: 12px 0 8px; display: flex; align-items: center; gap: 6px; }
-.comments-head i { color: var(--pink); }
+.rd-links { margin-top: 18px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.rd-links .reader-tg { margin-top: 0; }
+.link-plate {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 0.74rem; font-weight: 600; border-radius: 20px; padding: 6px 14px;
+    cursor: pointer; transition: var(--t);
+    background: var(--pink-soft); border: 1px dashed rgba(255,107,201,0.4); color: var(--pink);
+}
+.link-plate:hover { filter: brightness(1.2); }
+.link-plate.msg { background: var(--orange-soft); border-color: rgba(255,149,0,0.4); color: var(--orange); }
+.rd-comments { margin-top: 24px; }
+.rd-com-h { font-size: 0.82rem; font-weight: 600; color: var(--text-sec); margin-bottom: 10px; }
 .comment-row {
-    padding: 9px 11px; border-left: 2px solid rgba(255,107,201,0.3);
-    background: rgba(255,255,255,0.03); border-radius: 0 var(--rsm) var(--rsm) 0; margin-bottom: 6px;
+    padding: 10px 12px; border-left: 2px solid rgba(255,107,201,0.35);
+    background: rgba(255,255,255,0.03); border-radius: 0 var(--rsm) var(--rsm) 0; margin-bottom: 7px;
 }
-.comment-row .c-author { font-size: 0.76rem; font-weight: 600; color: var(--pink); }
-.comment-row .c-date { font-family: 'JetBrains Mono', monospace; font-size: 0.64rem; color: var(--text-ter); margin-left: 6px; }
-.comment-row .c-text { font-size: 0.8rem; line-height: 1.55; color: var(--text); margin-top: 4px; white-space: pre-wrap; word-break: break-word; }
-.comment-row.channel { border-left-color: var(--orange); }
+.c-author { font-size: 0.76rem; font-weight: 600; color: var(--pink); }
+.c-date { font-family: 'JetBrains Mono', monospace; font-size: 0.64rem; color: var(--text-ter); margin-left: 6px; }
+.c-text { font-size: 0.8rem; line-height: 1.55; color: var(--text); margin-top: 4px; }
+.mc-head .mc-shelf.com { margin-left: auto; background: var(--pink-soft); color: var(--pink); border-color: rgba(255,107,201,0.3); }
+.mc-head .mc-shelf.com ~ .mc-shelf { margin-left: 0; }
 
-/* ===== SHELF / STATS BLOCKS ===== */
-.shelves-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 14px; }
-.shelf-box {
-    padding: 11px 12px; border: 1px solid var(--border); border-radius: var(--rsm);
-    background: rgba(0,0,0,0.18);
+/* ===== DEV PANEL ===== */
+.devpanel {
+    position: fixed; top: 0; right: -380px; width: 360px; height: 100vh; z-index: 300;
+    background: rgba(16,16,16,0.97); border-left: 1px solid var(--border);
+    box-shadow: -12px 0 40px rgba(0,0,0,0.5);
+    display: flex; flex-direction: column; transition: right 0.25s ease;
 }
-.shelf-box .sb-kind { font-size: 0.66rem; color: var(--text-sec); font-family: 'JetBrains Mono', monospace; }
-.shelf-box .sb-label { font-size: 0.82rem; font-weight: 600; color: var(--text); margin: 3px 0; }
-.shelf-box .sb-count { font-size: 1.4rem; font-weight: 700; color: var(--orange); font-family: 'JetBrains Mono', monospace; }
+.devpanel.open { right: 0; }
+.dp-head {
+    padding: 14px 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 8px; font-size: 0.86rem; font-weight: 600;
+}
+.dp-head .dp-close { margin-left: auto; background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--text-sec); cursor: pointer; padding: 3px 9px; font-size: 0.72rem; }
+.dp-head .dp-close:hover { color: var(--text); background: var(--surface-hov); }
+.dp-body { flex: 1; overflow-y: auto; padding: 14px 16px; scrollbar-width: thin; }
+.dp-sec { margin-bottom: 18px; }
+.dp-sec-t { font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-ter); margin-bottom: 8px; }
+.dp-row { display: flex; justify-content: space-between; font-size: 0.76rem; padding: 4px 0; }
+.dp-row .k { color: var(--text-sec); }
+.dp-row .v { font-family: 'JetBrains Mono', monospace; color: var(--orange); }
+.dp-row .v.ok { color: var(--success); }
+.dp-btn {
+    width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: var(--rsm);
+    background: rgba(0,0,0,0.3); color: var(--text); font-size: 0.78rem; cursor: pointer; transition: var(--t);
+}
+.dp-btn:hover { background: var(--surface-hov); }
+.dp-log {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; line-height: 1.7;
+    color: var(--text-sec); background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border); border-radius: var(--rsm); padding: 10px; max-height: 260px; overflow-y: auto;
+}
+.dp-log .ts { color: var(--text-ter); }
+.dp-log .ok { color: var(--success); }
 
-.stats-row { display: flex; justify-content: space-between; padding: 7px 14px; font-size: 0.76rem; border-bottom: 1px solid var(--border); }
-.stats-row:last-child { border-bottom: none; }
-.stats-row .sk { color: var(--text-sec); }
-.stats-row .sv { font-family: 'JetBrains Mono', monospace; color: var(--orange); font-weight: 600; }
-
-/* ===== TOOLBAR ===== */
-.toolbar { display: flex; gap: 5px; flex-wrap: wrap; }
-.toolbar .btn-sm { padding: 4px 9px; font-size: 0.7rem; }
+/* ===== MODAL / TOAST ===== */
+.modal-back {
+    position: fixed; inset: 0; z-index: 400; display: none;
+    background: rgba(0,0,0,0.55); backdrop-filter: blur(3px);
+    align-items: center; justify-content: center; padding: 20px;
+}
+.modal-back.open { display: flex; }
+.modal {
+    width: 100%; max-width: 460px;
+    background: #262626; border: 1px solid var(--border); border-radius: var(--r);
+    box-shadow: var(--shadow); padding: 20px;
+    animation: rz-in 0.2s ease;
+}
+.modal-t { font-size: 1.05rem; font-weight: 700; margin-bottom: 12px; }
+.modal-body { font-size: 0.84rem; line-height: 1.6; color: var(--text-sec); }
+.modal-body code { font-family: 'JetBrains Mono', monospace; color: var(--orange); background: rgba(255,149,0,0.1); padding: 1px 6px; border-radius: 4px; font-size: 0.76rem; }
+.modal-body ol { margin: 10px 0 0 20px; display: flex; flex-direction: column; gap: 8px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.toast {
+    position: fixed; bottom: 46px; left: 50%; transform: translate(-50%, 12px);
+    background: #1d1d1d; border: 1px solid rgba(255,149,0,0.35); border-radius: 20px;
+    padding: 9px 18px; font-size: 0.8rem; color: var(--text);
+    box-shadow: var(--shadow); opacity: 0; pointer-events: none;
+    transition: all 0.25s ease; z-index: 500;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.dp-console { display: flex; gap: 6px; }
+.dp-console input {
+    flex: 1; padding: 8px 10px; background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border); border-radius: var(--rsm);
+    color: var(--text); font-size: 0.72rem;
+}
+.dp-console input:focus { outline: none; border-color: var(--orange); }
+.dp-hint { font-size: 0.64rem; color: var(--text-ter); margin-top: 6px; }
+.dp-log-head { display: flex; align-items: center; }
+.dp-log-head .dp-copy { margin-left: auto; background: none; border: none; color: var(--text-ter); font-size: 0.64rem; cursor: pointer; text-transform: none; letter-spacing: 0; }
+.dp-log-head .dp-copy:hover { color: var(--orange); }
 
 /* ===== FOOTER ===== */
 .app-footer {
-    padding: 8px 18px; border-top: 1px solid var(--border);
-    display: flex; align-items: center; gap: 14px; flex-shrink: 0;
-    background: rgba(22,22,22,0.85); font-size: 0.7rem; color: var(--text-sec);
-    font-family: 'JetBrains Mono', monospace;
+    padding: 7px 18px; border-top: 1px solid var(--border); flex-shrink: 0;
+    background: rgba(22,22,22,0.85); font-size: 0.68rem; color: var(--text-ter);
+    display: flex; gap: 12px;
 }
-.app-footer .dot { color: rgba(255,255,255,0.2); }
 .app-footer .acc { color: var(--orange); }
+
+/* ===== RESPONSIVE ===== */
+@media (max-width: 860px) {
+    #screen-archive { flex-direction: column; overflow-y: auto; }
+    .sidebar { width: 100%; flex-direction: row; flex-wrap: wrap; overflow: visible; }
+    .side-card { flex: 1 1 200px; }
+    .rozitta { display: none; }
+    .content { min-height: 70vh; }
+    .adv-panel { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+}
 </style>
 </head>
 <body>
 
 <div class="app">
 
-    <!-- =================== HEADER =================== -->
     <header class="header">
-        <div class="logo">
-            <div class="logo-mark"><i class="fas fa-book-reader"></i></div>
-            <div>
-                <span class="logo-text">Rozitta Librarian</span>
-                <span class="logo-sub">Поиск и чтение архивов Telegram · FTS5 + SQLite</span>
-            </div>
+        <div class="logo" id="logo" title="Тройной клик — панель разработчика">
+            <div class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h6a4 4 0 0 1 4 4v12a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v12a3 3 0 0 1 3-3h7z"/></svg></div>
+            <span class="logo-text">Rozitta Librarian</span>
         </div>
-        <div class="header-right">
-            <div class="status-pill" id="ws-pill" title="WebSocket-соединение">
-                <span class="status-dot" id="ws-dot"></span>
-                <span id="ws-text">подключение…</span>
-                <span class="port">:8011</span>
-            </div>
-            <div class="status-pill" id="idx-pill" title="Статус FTS-индекса">
-                <i class="fas fa-database" style="color:var(--orange); font-size:0.72rem;"></i>
-                <span id="idx-text">—</span>
-            </div>
+        <button class="crumb" id="crumb-home">← Все архивы</button>
+        <div class="hdr-right">
+            <div class="conn-warn" id="conn-warn"><span class="dot"></span> нет связи с сервером</div>
+            <button class="hdr-icon" onclick="devToggle()" title="Панель разработчика">⚙</button>
         </div>
     </header>
 
-    <!-- banner -->
-    <div class="mock-banner" id="banner">
-        <i class="fas fa-info-circle"></i>
-        <span id="banner-text">Сканирую папку output/ на наличие архивов…</span>
+    <div class="stage">
+
+        <!-- ============ ЭКРАН 1: ДОМАШНИЙ ============ -->
+        <div class="screen" id="screen-home">
+            <div>
+                <div class="home-head">
+                    <div>
+                        <div class="home-title">Мои архивы</div>
+                        <div class="home-sub">Выгрузки из Rozitta Parser, найденные в папке output</div>
+                    </div>
+                    <div class="home-actions">
+                        <button class="btn-ghost" onclick="rescan(true)" title="Проверить папку output ещё раз">↻ Обновить</button>
+                        <button class="btn-add" onclick="modalOpen()">＋ Добавить архив</button>
+                    </div>
+                </div>
+                <div class="arch-grid" id="arch-grid"></div>
+                <div class="rozitta home-mode" id="rz-home">
+                    <div class="rz-bubble" id="rz-home-bubble">
+                        <button class="rz-close" onclick="rzClose('home')">✕</button>
+                        <span id="rz-home-text">Выбери архив — и я помогу найти в нём что угодно.</span>
+                    </div>
+                    <div class="rz-avatar">🐸</div>
+                    <div class="rz-name">Розитта</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============ ЭКРАН 2–4: АРХИВ ============ -->
+        <div class="screen" id="screen-archive">
+
+            <aside class="sidebar">
+                <div class="side-card">
+                    <div class="side-arch-name"><span class="em" id="side-emoji">📚</span><span id="side-name">—</span></div>
+                    <div class="toc-item" data-nav="start" onclick="go('start')">
+                        <span>🏠</span> Обзор
+                    </div>
+                    <div class="toc-item" data-nav="shelf-messages" onclick="go('shelf','messages')">
+                        <span>💬</span> Сообщения <span class="cnt" id="cnt-messages">0</span>
+                    </div>
+                    <div class="toc-item" data-nav="shelf-records" id="toc-records" onclick="go('shelf','records')">
+                        <span>🎙</span> Записи <span class="cnt" id="cnt-records">0</span>
+                    </div>
+                </div>
+
+                <div class="side-card">
+                    <div class="side-sec-label">Сводка
+                        <span class="q" title="Librarian только читает архив и ничего в нём не меняет.">?</span>
+                    </div>
+                    <div class="sum-row"><span class="k">Источник</span><span class="v" id="sum-handle">—</span></div>
+                    <div class="sum-row"><span class="k">Тип</span><span class="v" id="sum-type">—</span></div>
+                    <div class="sum-row"><span class="k">Период</span><span class="v" id="sum-dates">—</span></div>
+                    <div class="sum-row"><span class="k">Сообщений</span><span class="v" id="sum-msg">—</span></div>
+                    <div class="sum-row"><span class="k">Записей</span><span class="v" id="sum-rec">—</span></div>
+                </div>
+
+                <div class="rozitta" id="rz-side">
+                    <div class="rz-bubble" id="rz-side-bubble">
+                        <button class="rz-close" onclick="rzClose('side')">✕</button>
+                        <span id="rz-side-text"></span>
+                    </div>
+                    <div class="rz-avatar" title="Розитта-библиотекарь">🐸</div>
+                    <div class="rz-name">Розитта</div>
+                </div>
+            </aside>
+
+            <div class="content">
+
+                <div class="search-bar">
+                    <div class="search-row">
+                        <div class="search-inp-wrap">
+                            <span class="ico">🔍</span>
+                            <input id="q-input" placeholder="Что ищем в этом архиве?" autocomplete="off">
+                        </div>
+                        <button class="btn-search" onclick="doSearch()">Искать</button>
+                    </div>
+                    <div class="search-under">
+                        <span class="chip-label">Например:</span>
+                        <span id="chips"></span>
+                        <button class="adv-toggle" id="adv-toggle" onclick="toggleAdv()">
+                            Точный поиск <span class="arr">▾</span>
+                        </button>
+                    </div>
+                    <div class="adv-panel" id="adv-panel">
+                        <div><label>Автор</label><input id="q-author" placeholder="@username" class="mono"></div>
+                        <div><label>Дата от</label><input id="q-from" type="date" class="mono"></div>
+                        <div><label>Дата до</label><input id="q-to" type="date" class="mono"></div>
+                    </div>
+                </div>
+
+                <!-- ВИД: стартовая страница -->
+                <div class="view" id="view-start">
+                    <div class="v-title" id="start-title">—</div>
+                    <div class="v-sub" id="start-sub">—</div>
+                    <div class="sec-h">🕐 Последние сообщения</div>
+                    <div id="start-recent"></div>
+                </div>
+
+                <!-- ВИД: полка -->
+                <div class="view" id="view-shelf">
+                    <div class="v-title" id="shelf-title">—</div>
+                    <div class="v-sub" id="shelf-sub">—</div>
+                    <div id="shelf-list"></div>
+                </div>
+
+                <!-- ВИД: результаты -->
+                <div class="view" id="view-results">
+                    <div class="results-count" id="results-count"></div>
+                    <div id="results-list"></div>
+                </div>
+
+                <!-- ВИД: ридер -->
+                <div class="view" id="view-reader">
+                    <button class="reader-back" id="reader-back" onclick="goBack()">← Назад</button>
+                    <div class="reader-head">
+                        <div class="reader-title" id="rd-title">—</div>
+                        <span class="rec-plate" id="rd-recplate" style="display:none;">🎙 Расшифровка аудио</span>
+                    </div>
+                    <div class="reader-meta">
+                        <span class="reader-author"><span class="reader-ava" id="rd-ava">?</span><span id="rd-author">—</span></span>
+                        <span class="reader-date" id="rd-date">—</span>
+                    </div>
+                    <div class="reader-body" id="rd-body"></div>
+                    <div class="rd-links">
+                        <a class="reader-tg" id="rd-tg" href="#" target="_blank" rel="noopener">🔗 Открыть в Telegram</a>
+                        <span id="rd-linked" style="display:contents;"></span>
+                    </div>
+                    <div class="rd-comments" id="rd-comments"></div>
+                    <div class="reader-nav">
+                        <button class="rn-btn" id="rn-prev" onclick="rdNav(-1)"><span class="rn-dir">← Предыдущее</span><span id="rn-prev-t"></span></button>
+                        <button class="rn-btn next" id="rn-next" onclick="rdNav(1)"><span class="rn-dir">Следующее →</span><span id="rn-next-t"></span></button>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
     </div>
 
-    <!-- =================== WORKSPACE =================== -->
-    <div class="workspace">
-
-        <!-- ============ LEFT: ARCHIVES + SEARCH ============ -->
-        <div class="col col-left">
-
-            <div class="card">
-                <div class="card-head">
-                    <div class="card-title"><i class="fas fa-archive"></i> Архивы</div>
-                    <div class="count-chips">
-                        <span class="cnt gray" id="archives-count"><i class="fas fa-folder"></i> 0</span>
-                    </div>
-                </div>
-                <div class="card-body" id="archives-body" style="max-height: 240px; flex: 0 0 auto;">
-                    <div class="empty-state" id="archives-empty">
-                        <i class="fas fa-folder-open"></i>
-                        <div class="empty-title">Архивы не найдены</div>
-                        <div class="empty-desc">Положите папку архива Rozitta Parser в <code>output/</code>. Должны быть <code>parser.db</code> и <code>archive_passport.json</code>.</div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-head">
-                    <div class="card-title"><i class="fas fa-search"></i> Поиск</div>
-                </div>
-                <div class="card-body" style="padding: 14px;">
-                    <div class="field">
-                        <label>Запрос <span class="opt">FTS5 · префиксы: слов*</span></label>
-                        <div class="inp-wrap has-icon-left">
-                            <i class="fas fa-search ico-left"></i>
-                            <input class="mono" id="q-input" placeholder='напр.: обесценива' autocomplete="off">
-                        </div>
-                    </div>
-
-                    <div class="field">
-                        <label>Автор <span class="opt">фильтр по username</span></label>
-                        <div class="inp-wrap">
-                            <input id="q-author" placeholder="@username (опционально)" autocomplete="off">
-                        </div>
-                    </div>
-
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-                        <div class="field" style="margin-bottom:0;">
-                            <label>Дата от</label>
-                            <input class="mono" id="q-from" type="date">
-                        </div>
-                        <div class="field" style="margin-bottom:0;">
-                            <label>Дата до</label>
-                            <input class="mono" id="q-to" type="date">
-                        </div>
-                    </div>
-
-                    <button class="btn btn-primary btn-block btn-lg" id="q-btn" style="margin-top:12px;">
-                        <i class="fas fa-search"></i> Искать
-                    </button>
-
-                    <div class="safety-note">
-                        <i class="fas fa-shield-alt"></i>
-                        <b>Только чтение.</b> Parser.db открывается в режиме <code>mode=ro</code> — Librarian физически не может ничего туда записать. Свой индекс — в <code>librarian.db</code>.
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-head">
-                    <div class="card-title"><i class="fas fa-toolbox"></i> Инструменты</div>
-                </div>
-                <div class="card-body" style="padding: 14px;">
-                    <div style="display:flex; flex-direction:column; gap: 7px;">
-                        <button class="btn btn-sm" id="tool-shelves"><i class="fas fa-layer-group"></i> list_shelves() — полки архива</button>
-                        <button class="btn btn-sm" id="tool-stats"><i class="fas fa-chart-bar"></i> stats() — общие числа</button>
-                        <button class="btn btn-sm" id="tool-whatsnew"><i class="fas fa-clock"></i> whats_new() — последние посты</button>
-                        <button class="btn btn-sm" id="tool-reindex"><i class="fas fa-sync"></i> Перестроить FTS-индекс</button>
-                    </div>
-                </div>
-            </div>
-
-        </div>
-
-        <!-- ============ MIDDLE: RESULTS / POST ============ -->
-        <div class="col col-mid">
-            <div class="card">
-                <div class="card-head">
-                    <div class="card-title"><i class="fas fa-list"></i> <span id="mid-title">Результаты поиска</span></div>
-                    <div class="count-chips">
-                        <span class="cnt orange" id="mid-count" style="display:none;"><i class="fas fa-hashtag"></i> 0</span>
-                    </div>
-                    <div class="toolbar" style="margin-left:auto;">
-                        <button class="btn-sm" id="back-to-search" style="display:none;"><i class="fas fa-arrow-left"></i> К поиску</button>
-                    </div>
-                </div>
-                <div class="card-body" id="mid-body">
-                    <div class="empty-state">
-                        <i class="fas fa-search"></i>
-                        <div class="empty-title">Здесь появятся результаты</div>
-                        <div class="empty-desc">Выберите архив слева и введите поисковый запрос. Поддерживаются префиксные формы: <code>обесценива*</code> найдёт все словоформы.</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- ============ RIGHT: AVATAR + LOGS ============ -->
-        <div class="col col-right-panel">
-            <div class="char-wrap">
-                <div class="frog-avatar" id="frog-avatar" title="Розитта-библиотекарь (кликни)">
-                    <span>🐸</span>
-                </div>
-                <div class="char-name">Розитта</div>
-                <div class="char-hint">библиотекарь · читает архивы<br>и находит точные ссылки</div>
-            </div>
-            <div class="right-explanations">
-                <div class="safety-note">
-                    <i class="fas fa-book"></i>
-                    <b>Этап 1 — «Читальный зал».</b>
-                    Поиск без LLM: FTS5 по <code>messages.text</code> + <code>transcriptions.text</code>. Каждое попадание — кликабельная ссылка на пост.
-                </div>
-            </div>
-            <div class="right-logs">
-                <div class="right-logs-head">
-                    <i class="fas fa-terminal"></i> Лог
-                    <button class="clear-btn" id="clear-log">очистить</button>
-                </div>
-                <div class="right-logs-body" id="log-panel"></div>
-            </div>
-        </div>
-
-    </div>
-
-    <!-- =================== FOOTER =================== -->
     <footer class="app-footer">
-        <span><i class="fas fa-circle" style="color:var(--success); font-size:0.5rem;"></i> Rozitta Librarian · stage 1</span>
-        <span class="dot">·</span>
-        <span>output: <span class="acc" id="footer-output">—</span></span>
-        <span class="dot">·</span>
-        <span>archive: <span class="acc" id="footer-archive">—</span></span>
-        <span class="dot">·</span>
-        <span>index: <span class="acc" id="footer-index">—</span></span>
+        <span>Rozitta Librarian · этап 1 «Читальный зал»</span>
+        <span class="acc">этап 1 · экраны 1–2 — реальные данные, экраны 3–4 — заглушка</span>
     </footer>
+
+</div>
+
+<!-- ============ МОДАЛКА: ДОБАВИТЬ АРХИВ ============ -->
+<div class="modal-back" id="modal-add" onclick="if(event.target===this)modalClose()">
+    <div class="modal">
+        <div class="modal-t">＋ Добавить архив</div>
+        <div class="modal-body">
+            Librarian показывает архивы, которые лежат в папке <code>output</code> рядом с программой.
+            <ol>
+                <li>Выгрузи чат или канал в <b>Rozitta Parser</b> — лучше всего подходит пресет «База знаний для ИИ».</li>
+                <li>Скопируй папку архива целиком в <code>output/</code>.</li>
+                <li>Нажми «Проверить папку» — новый архив появится в списке.</li>
+            </ol>
+        </div>
+        <div class="modal-actions">
+            <button class="btn-ghost" onclick="modalClose()">Закрыть</button>
+            <button class="btn-add" onclick="modalClose(); rescan(true)">Проверить папку</button>
+        </div>
+    </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- ============ ПАНЕЛЬ РАЗРАБОТЧИКА ============ -->
+<div class="devpanel" id="devpanel">
+    <div class="dp-head">⚙ Панель разработчика <button class="dp-close" onclick="devToggle(false)">закрыть</button></div>
+    <div class="dp-body">
+        <div class="dp-sec">
+            <div class="dp-sec-t">Соединение</div>
+            <div class="dp-row"><span class="k">WebSocket</span><span class="v ok">подключён</span></div>
+            <div class="dp-row"><span class="k">Порт</span><span class="v">:8011</span></div>
+        </div>
+        <div class="dp-sec">
+            <div class="dp-sec-t">FTS-индекс</div>
+            <div class="dp-row"><span class="k">Статус</span><span class="v ok">актуален</span></div>
+            <div class="dp-row"><span class="k">Документов</span><span class="v">11</span></div>
+            <div class="dp-row"><span class="k">librarian.db</span><span class="v">96 KB</span></div>
+            <div style="margin-top:8px;"><button class="dp-btn" onclick="devLog('reindex: запущено вручную')">Перестроить индекс</button></div>
+        </div>
+        <div class="dp-sec">
+            <div class="dp-sec-t">Пути и версия</div>
+            <div class="dp-row"><span class="k">output/</span><span class="v">./output</span></div>
+            <div class="dp-row"><span class="k">librarian.db</span><span class="v">./librarian.db</span></div>
+            <div class="dp-row"><span class="k">Версия</span><span class="v">0.1.0-mock</span></div>
+            <div style="margin-top:8px;"><button class="dp-btn" onclick="rescan(false)">Пересканировать output/</button></div>
+        </div>
+        <div class="dp-sec">
+            <div class="dp-sec-t">Консоль операций</div>
+            <div class="dp-console">
+                <input id="dp-op" class="mono" placeholder='stats {"archive":"phil"}'>
+                <button class="dp-btn" style="width:auto; padding: 8px 12px;" onclick="dpExec()">▶</button>
+            </div>
+            <div class="dp-hint">Отправляет сырую WS-операцию, ответ пишется в лог</div>
+        </div>
+        <div class="dp-sec">
+            <div class="dp-sec-t dp-log-head">Лог операций <button class="dp-copy" onclick="dpCopy()">копировать</button></div>
+            <div class="dp-log" id="dp-log"></div>
+        </div>
+    </div>
 </div>
 
 <script>
-// ============================================================================
-// State
-// ============================================================================
-const state = {
-    ws: null,
-    archives: [],
-    currentArchiveId: null,
-    lastSearch: null,
-    busy: false,
+/* =================================================================
+ * Rozitta Librarian — UI Этап 1 (реализация UI-1 + UI-2)
+ * Спецификация: /home/z/my-project/upload/librarian_ui_спецификация_этап1.md
+ *
+ * Подключение к бэкенду: WebSocket → ws://<host>/ws
+ *   Операции: list_archives, scan_archives, open_archive,
+ *             list_shelves, stats, whats_new
+ *             (search, read_post — пока mock для экранов 3 и 4)
+ * ================================================================= */
+
+const $ = id => document.getElementById(id);
+const esc = s => (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+/* ================= СОСТОЯНИЕ ================= */
+const S = {
+  ws: null,
+  wsConnected: false,
+  archives: [],            // список архивов (массив карточек)
+  archive: null,           // текущий открытый архив (карточка)
+  archiveFull: null,       // полный паспорт (для chat_id и т.п.)
+  view: 'home',            // home | start | shelf | results | reader
+  shelf: null,
+  shelves: [],             // ответ list_shelves
+  statsData: null,         // ответ stats
+  whatsNew: [],            // ответ whats_new
+  query: '', results: [],  // для UI-3 (mock-сценарий)
+  backCtx: null,           // { label, restore() }
+  readerItem: null,
+  rzShown: {},
+  // Mock-данные для UI-3/UI-4 — чтобы визуально показать, как будет выглядеть.
+  // Реальные данные подключим в следующем заходе.
+  mock: null,
 };
 
-const $ = (id) => document.getElementById(id);
+/* ================= MOCK для UI-3/UI-4 (временно) =================
+ * Это тот же mock, что в макете, но только для экранов 3 и 4.
+ * На экранах 1 и 2 — реальные данные с бэкенда.
+ */
+S.mock = {
+  phil: {
+    id: 'phil', emoji: '📚', name: 'Философия буднего дня',
+    handle: '@philosophy_daily', type: 'канал', dates: '15 сен — 1 окт 2024',
+    chips: ['обесценивание', 'ценности', 'интерфейс'],
+    items: [
+      { id: 1, shelf: 'messages', date: '15 сен 2024, 09:10', d: '2024-09-15', author: '@philosophy_daily',
+        text: 'Ценности не выбирают на полке, как товар. Их обнаруживают задним числом — по тому, на что мы тратим внимание, когда никто не проверяет. Посмотри на свой вчерашний день: вот твой честный список ценностей.',
+        comments: [
+          { author: '@vassa_k', date: '15 сен 2024, 12:40', text: 'Список ценностей из вчерашнего дня — отрезвляющее упражнение, спасибо.' }
+        ] },
+      { id: 2, shelf: 'messages', date: '18 сен 2024, 11:47', d: '2024-09-18', author: '@philosophy_daily',
+        text: 'Язык — это интерфейс между нами и миром. Плохой интерфейс скрывает функциональность; бедный словарь скрывает оттенки опыта. Учить новые слова — значит расширять то, что вообще можно заметить.' },
+      { id: 8, shelf: 'messages', voice: true, rec: 7, date: '25 сен 2024, 18:55', d: '2024-09-25', author: '@philosophy_daily',
+        text: 'Аудио-эфир «Ценности и цена», 42 минуты. Слушайте в записи — или читайте расшифровку.' },
+      { id: 7, shelf: 'records', src: 8, date: '25 сен 2024, 19:00', d: '2024-09-25', author: '@philosophy_daily',
+        text: 'Всем привет, это запись эфира про ценности и цену. Мы часто путаем эти два слова, а между тем цена — то, что мы платим, а ценность — то, что получаем. Обесценивание начинается там, где мы перестаём различать одно и другое.\n\n[фрагмент расшифровки, полная запись — 42 минуты]' },
+      { id: 3, shelf: 'messages', date: '28 сен 2024, 14:22', d: '2024-09-28', author: '@philosophy_daily',
+        text: 'Проблема обесценивания труда в современных условиях не в том, что платят мало. Она в том, что результат труда перестал быть видимым: закрытая задача исчезает в трекере, а сложенная стена стоит десятилетиями. Невидимое легко обесценить.',
+        comments: [
+          { author: '@vassa_k', date: '28 сен 2024, 15:10', text: 'Очень точно про невидимость результата. У нас помогло еженедельное демо — труд снова стал видимым.' },
+          { author: '@dim5x', date: '28 сен 2024, 16:02', text: 'А что делать с трудом, который невидим по своей природе — поддержка, инфраструктура?' }
+        ] },
+      { id: 4, shelf: 'messages', date: '29 сен 2024, 10:05', d: '2024-09-29', author: '@philosophy_daily',
+        text: 'Обесценивание чужого опыта начинается со слов «да это же просто». Просто — для того, кто уже прошёл путь. Уважение к сложности чужого пути — минимальная форма честности.' },
+      { id: 5, shelf: 'messages', date: '30 сен 2024, 16:30', d: '2024-09-30', author: '@philosophy_daily',
+        text: 'Привычка — это решение, принятое один раз и исполняемое бесплатно. Сила воли дорога, привычки дёшевы.' },
+      { id: 6, shelf: 'messages', date: '1 окт 2024, 12:00', d: '2024-10-01', author: '@philosophy_daily',
+        text: 'Итоги сентябрьского цикла: говорили про ценности, интерфейсы восприятия и обесценивание. Общая нить — внимание.' },
+    ]
+  },
+  pyforum: {
+    id: 'pyforum', emoji: '💬', name: 'Tech Forum — Python',
+    handle: '@pyforum', type: 'группа', dates: '10 фев — 5 мар 2025',
+    chips: ['асинхронность', 'типизация'],
+    items: [
+      { id: 11, shelf: 'messages', date: '10 фев 2025, 13:15', d: '2025-02-10', author: '@dim5x',
+        text: 'Коллеги, кто уже переводил большой проект на строгую типизацию? Интересует, насколько mypy в strict-режиме ловит реальные баги.' },
+      { id: 12, shelf: 'messages', date: '14 фев 2025, 18:40', d: '2025-02-14', author: '@vassa_k',
+        text: 'Переводили. Типизация окупилась при первом же рефакторинге: mypy подсветил все места, где поменялась сигнатура.' },
+      { id: 13, shelf: 'messages', date: '20 фев 2025, 09:02', d: '2025-02-20', author: '@dim5x',
+        text: 'Вопрос про асинхронность: FastAPI + SQLite. Есть ли смысл в async-драйвере, если база локальная?' },
+      { id: 14, shelf: 'messages', date: '5 мар 2025, 21:11', d: '2025-03-05', author: '@vassa_k',
+        text: 'Для локальной однопользовательской базы асинхронность драйвера почти ничего не даёт — узкое место не там.' },
+    ]
+  }
+};
 
-// ============================================================================
-// Logging
-// ============================================================================
-function logLine(message, level = 'info') {
-    const panel = $('log-panel');
-    const now = new Date().toLocaleTimeString('ru-RU', { hour12: false });
-    const line = document.createElement('div');
-    line.className = `log-line ${level}`;
-    line.innerHTML = `<span class="ts">${now}</span><span class="msg"></span>`;
-    line.querySelector('.msg').textContent = message;
-    panel.appendChild(line);
-    panel.scrollTop = panel.scrollHeight;
+/* ================= WEBSOCKET ================= */
+function wsConnect(){
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${proto}//${location.host}/ws`;
+  S.ws = new WebSocket(url);
+
+  S.ws.onopen = () => {
+    S.wsConnected = true;
+    $('conn-warn').style.display = 'none';
+    devLog('WebSocket: подключён');
+    // На старте — сразу получить список архивов для экрана 1
+    wsSend({op: 'list_archives'});
+  };
+
+  S.ws.onclose = () => {
+    S.wsConnected = false;
+    $('conn-warn').style.display = 'inline-flex';
+    devLog('WebSocket: соединение закрыто', 'warn');
+    // Попытка переподключения через 2 сек
+    setTimeout(() => { if (!S.wsConnected) wsConnect(); }, 2000);
+  };
+
+  S.ws.onerror = (e) => {
+    devLog('WebSocket: ошибка', 'error');
+  };
+
+  S.ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    handleWsMessage(msg);
+  };
 }
 
-function setBanner(text, kind = 'info') {
-    $('banner-text').textContent = text;
-    $('banner').classList.remove('success', 'error');
-    if (kind === 'success' || kind === 'error') $('banner').classList.add(kind);
+function wsSend(payload){
+  if (S.ws && S.ws.readyState === WebSocket.OPEN){
+    S.ws.send(JSON.stringify(payload));
+  } else {
+    devLog('WS не готов — сообщение потеряно', 'error');
+  }
 }
 
-function setWsState(text, kind = 'ok') {
-    $('ws-text').textContent = text;
-    const dot = $('ws-dot');
-    dot.classList.remove('busy', 'error');
-    if (kind === 'busy') dot.classList.add('busy');
-    if (kind === 'error') dot.classList.add('error');
+/* ================= ОБРАБОТКА WS-СООБЩЕНИЙ ================= */
+const _pending = {}; // op → callback (для упрощённой request/response поверх потокового WS)
+
+function handleWsMessage(msg){
+  if (msg.type === 'hello'){
+    devLog(`hello: ${msg.message} (порт ${msg.port})`);
+    return;
+  }
+  if (msg.type === 'log'){
+    devLog(msg.message, msg.level === 'success' ? 'ok' : msg.level === 'error' ? 'error' : msg.level === 'warning' ? 'warn' : '');
+    return;
+  }
+  if (msg.type === 'error'){
+    devLog(`ошибка: ${msg.message}`, 'error');
+    toast(msg.message);
+    return;
+  }
+  if (msg.type === 'result'){
+    handleResult(msg.op, msg.data);
+    return;
+  }
 }
 
-function setBusy(busy) {
-    state.busy = busy;
-    $('q-btn').disabled = busy;
-    setWsState(busy ? 'работаю…' : 'готово', busy ? 'busy' : 'ok');
-}
-
-// ============================================================================
-// WebSocket
-// ============================================================================
-function connect() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    state.ws = new WebSocket(`${proto}://${location.host}/ws`);
-
-    state.ws.onopen = () => {
-        setWsState('готово', 'ok');
-        logLine('WebSocket подключён', 'success');
-        // Сразу запросим список архивов
-        sendOp('list_archives', null, {});
-    };
-
-    state.ws.onclose = () => {
-        setWsState('отключён', 'error');
-        logLine('WebSocket отключён, переподключение через 2с…', 'warning');
-        setTimeout(connect, 2000);
-    };
-
-    state.ws.onerror = () => {
-        setWsState('ошибка', 'error');
-    };
-
-    state.ws.onmessage = (ev) => {
-        try {
-            const msg = JSON.parse(ev.data);
-            handleWsMessage(msg);
-        } catch (e) {
-            logLine('Не удалось разобрать сообщение WS: ' + e.message, 'error');
-        }
-    };
-}
-
-function sendOp(op, archiveId, args) {
-    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-        logLine('WS не подключён, операция отменена', 'error');
-        return;
+function handleResult(op, data){
+  if (op === 'list_archives' || op === 'scan_archives'){
+    S.archives = data.archives || [];
+    renderHome();
+    if (op === 'scan_archives'){
+      toast(`Проверила папку output — найдено архивов: ${S.archives.length}`);
     }
-    setBusy(true);
-    state.ws.send(JSON.stringify({ op, archive_id: archiveId || '', args: args || {} }));
+    return;
+  }
+  if (op === 'open_archive'){
+    // data = { card, passport }
+    S.archive = data.card;
+    S.archiveFull = data.passport;
+    // После открытия архива — параллельно получить полки, сводку, последние
+    if (S.archive){
+      wsSend({op: 'list_shelves', archive_id: S.archive.id});
+      wsSend({op: 'stats',        archive_id: S.archive.id});
+      wsSend({op: 'whats_new',    archive_id: S.archive.id, args: {limit: 3}});
+    }
+    return;
+  }
+  if (op === 'list_shelves'){
+    S.shelves = data.shelves || data || [];
+    renderSidebarAfterOpen();
+    return;
+  }
+  if (op === 'stats'){
+    S.statsData = data;
+    renderSidebarAfterOpen();
+    return;
+  }
+  if (op === 'whats_new'){
+    S.whatsNew = data.items || data.posts || data.recent || [];
+    // Если ждали полку — отрисуем полку, иначе стартовую страницу
+    if (S._pendingShelf){
+      renderShelfFromWhatsNew(S._pendingShelf);
+      S._pendingShelf = null;
+    } else {
+      renderStart();
+    }
+    return;
+  }
+  devLog(`op=${op} — нет обработчика, данные в логе`, 'warn');
+  devLog(JSON.stringify(data).slice(0, 200));
 }
 
-function handleWsMessage(msg) {
-    switch (msg.type) {
-        case 'hello':
-            logLine(msg.message, 'info');
-            $('footer-output').textContent = '/output';
-            break;
-        case 'log':
-            logLine(msg.message, msg.level || 'info');
-            break;
-        case 'error':
-            logLine(msg.message, 'error');
-            setBanner(msg.message, 'error');
-            setBusy(false);
-            break;
-        case 'result':
-            setBusy(false);
-            handleResult(msg.op, msg.archive_id, msg.data);
-            break;
-        default:
-            logLine('Неизвестный тип WS-сообщения: ' + msg.type, 'warning');
-    }
+/* ================= РОЗИТТА ================= */
+function rzSay(where, key, text){
+  if (S.rzShown[key]) return;
+  const bubble = $(where === 'home' ? 'rz-home-bubble' : 'rz-side-bubble');
+  const span   = $(where === 'home' ? 'rz-home-text'   : 'rz-side-text');
+  if (!bubble || !span) return;
+  span.textContent = text;
+  bubble.style.display = 'block';
+  bubble.dataset.key = key;
+}
+function rzClose(where){
+  const bubble = $(where === 'home' ? 'rz-home-bubble' : 'rz-side-bubble');
+  if (!bubble) return;
+  if (bubble.dataset.key) S.rzShown[bubble.dataset.key] = true;
+  bubble.style.display = 'none';
 }
 
-// ============================================================================
-// Result rendering
-// ============================================================================
-function handleResult(op, archiveId, data) {
-    if (op === 'list_archives') {
-        state.archives = data.archives || [];
-        renderArchives();
-        if (state.archives.length === 0) {
-            setBanner('Архивы не найдены. Положите папку архива в output/.', 'error');
-        } else {
-            setBanner(`Найдено архивов: ${state.archives.length}. Кликните по карточке слева, чтобы открыть.`, 'success');
-        }
-        return;
-    }
-    if (op === 'open_archive') {
-        renderArchives();
-        $('idx-text').textContent = 'готов';
-        $('footer-archive').textContent = data.passport?.title || data.id;
-        $('footer-index').textContent = data.has_librarian_db ? 'built' : '—';
-        // Сразу запросим полки — будет карточка архива в mid
-        sendOp('list_shelves', state.currentArchiveId, {});
-        return;
-    }
-    if (op === 'search') {
-        renderSearchResults(data);
-        return;
-    }
-    if (op === 'read_post') {
-        renderPost(data);
-        return;
-    }
-    if (op === 'list_shelves') {
-        renderShelves(data);
-        return;
-    }
-    if (op === 'stats') {
-        renderStats(data);
-        return;
-    }
-    if (op === 'whats_new') {
-        renderWhatsNew(data);
-        return;
-    }
-    if (op === 'reindex') {
-        logLine('Индекс перестроен: ' + JSON.stringify(data.reindex), 'success');
-        $('footer-index').textContent = 'rebuilt';
-        return;
-    }
-}
-
-// ============================================================================
-// Renderers
-// ============================================================================
-function renderArchives() {
-    const body = $('archives-body');
-    $('archives-count').innerHTML = `<i class="fas fa-folder"></i> ${state.archives.length}`;
-
-    if (state.archives.length === 0) {
-        body.innerHTML = `<div class="empty-state"><i class="fas fa-folder-open"></i><div class="empty-title">Архивы не найдены</div><div class="empty-desc">Положите папку архива в <code style="font-family:'JetBrains Mono',monospace;background:rgba(255,255,255,0.06);padding:1px 4px;border-radius:3px;">output/</code>.</div></div>`;
-        return;
-    }
-
-    body.innerHTML = state.archives.map(a => {
-        const isActive = a.id === state.currentArchiveId;
-        const p = a.passport || {};
-        const typeIcon = {
-            channel: 'fa-bullhorn', group: 'fa-users',
-            forum: 'fa-comments', private: 'fa-user'
-        }[p.chat_type] || 'fa-folder';
-        const dateStr = p.date_from && p.date_to
-            ? `${p.date_from.slice(0,10)} → ${p.date_to.slice(0,10)}`
-            : '—';
-        return `
-            <div class="archive-card ${isActive ? 'active' : ''}" data-id="${a.id}">
-                <div class="ac-title"><i class="fas ${typeIcon}"></i> ${escapeHtml(p.title || a.id)}</div>
-                <div class="ac-meta">
-                    <span><i class="fas fa-comment-dots"></i> ${p.messages_count ?? '—'}</span>
-                    <span><i class="fas fa-microphone"></i> ${p.transcriptions_count ?? 0}</span>
-                    ${p.username ? `<code>${escapeHtml(p.username)}</code>` : ''}
-                    <span><i class="far fa-calendar"></i> ${dateStr}</span>
-                </div>
-            </div>
-        `;
-    }).join('');
-
-    body.querySelectorAll('.archive-card').forEach(el => {
-        el.addEventListener('click', () => {
-            const id = el.dataset.id;
-            if (id === state.currentArchiveId) return;
-            state.currentArchiveId = id;
-            logLine(`Открываю архив: ${id}`, 'info');
-            sendOp('open_archive', id, {});
-        });
-    });
-}
-
-function renderShelves(data) {
-    $('mid-title').textContent = 'Полки архива';
-    $('back-to-search').style.display = 'none';
-    $('mid-count').style.display = 'none';
-    const body = $('mid-body');
-
-    const shelvesHtml = (data.shelves || []).map(s => `
-        <div class="shelf-box">
-            <div class="sb-kind">${escapeHtml(s.kind)}</div>
-            <div class="sb-label">${escapeHtml(s.label)}</div>
-            <div class="sb-count">${s.count.toLocaleString('ru-RU')}</div>
-        </div>
-    `).join('');
-
-    const meta = [
-        ['Тип чата', data.chat_type || '—'],
-        ['Username', data.username || '—'],
-        ['Период с', (data.date_from || '—').slice(0, 19)],
-        ['Период по', (data.date_to || '—').slice(0, 19)],
-        ['Parser', data.parser_version || '—'],
-        ['Экспортирован', (data.exported_at || '—').slice(0, 19)],
-    ].map(([k, v]) => `<div class="stats-row"><span class="sk">${k}</span><span class="sv">${escapeHtml(String(v))}</span></div>`).join('');
-
-    body.innerHTML = `
-        <div class="shelves-grid">${shelvesHtml}</div>
-        <div style="border-top:1px solid var(--border); margin-top:8px;">${meta}</div>
-    `;
-}
-
-function renderStats(data) {
-    $('mid-title').textContent = 'Статистика архива';
-    $('back-to-search').style.display = state.lastSearch ? 'inline-flex' : 'none';
-    $('mid-count').style.display = 'none';
-    const body = $('mid-body');
-
-    const overview = [
-        ['Архив', data.archive_title || '—'],
-        ['Schema version', `v${data.schema_version}`],
-        ['Сообщений', data.messages_count?.toLocaleString('ru-RU') || '0'],
-        ['Транскрипций', data.transcriptions_count?.toLocaleString('ru-RU') || '0'],
-        ['Период с', (data.date_from || '—').slice(0, 19)],
-        ['Период по', (data.date_to || '—').slice(0, 19)],
-    ].map(([k, v]) => `<div class="stats-row"><span class="sk">${k}</span><span class="sv">${escapeHtml(String(v))}</span></div>`).join('');
-
-    const authors = (data.top_authors || []).map((a, i) =>
-        `<div class="stats-row"><span class="sk">#${i+1} · ${escapeHtml(a.author)}</span><span class="sv">${a.count.toLocaleString('ru-RU')}</span></div>`
-    ).join('');
-
-    body.innerHTML = `
-        <div style="padding:8px 0;">${overview}</div>
-        <div style="padding:14px 14px 6px; font-size:0.78rem; font-weight:600; color:var(--text-sec);">Топ авторов</div>
-        <div>${authors || '<div class="empty-state"><i class="fas fa-user-slash"></i><div class="empty-title">Нет данных</div></div>'}</div>
-    `;
-}
-
-function renderWhatsNew(data) {
-    $('mid-title').textContent = 'Что нового';
-    $('back-to-search').style.display = state.lastSearch ? 'inline-flex' : 'none';
-    $('mid-count').style.display = 'inline-flex';
-    $('mid-count').innerHTML = `<i class="fas fa-hashtag"></i> ${data.count}`;
-
-    const body = $('mid-body');
-    if (!data.items || data.items.length === 0) {
-        body.innerHTML = `<div class="empty-state"><i class="fas fa-clock"></i><div class="empty-title">Ничего нового</div><div class="empty-desc">За указанный период новых сообщений нет.</div></div>`;
-        return;
-    }
-
-    body.innerHTML = data.items.map(item => `
-        <div class="search-result" data-chat="${item.chat_id}" data-msg="${item.message_id}">
-            <div class="sr-head">
-                <span class="sr-author">${escapeHtml(item.author)}</span>
-                <span class="sr-date">${escapeHtml(item.date)}</span>
-                <span class="sr-source message">new</span>
-            </div>
-            <div class="sr-snippet">${escapeHtml(item.text_preview || '—')}</div>
-        </div>
-    `).join('');
-
-    body.querySelectorAll('.search-result').forEach(el => {
-        el.addEventListener('click', () => {
-            openPost(parseInt(el.dataset.chat), parseInt(el.dataset.msg));
-        });
-    });
-}
-
-function renderSearchResults(data) {
-    state.lastSearch = data;
-    $('mid-title').textContent = `Поиск: «${data.query}»`;
-    $('back-to-search').style.display = 'none';
-    $('mid-count').style.display = 'inline-flex';
-    $('mid-count').innerHTML = `<i class="fas fa-hashtag"></i> ${data.count}`;
-
-    const body = $('mid-body');
-    if (data.count === 0) {
-        body.innerHTML = `
-            <div class="empty-state">
-                <i class="fas fa-search-minus"></i>
-                <div class="empty-title">Ничего не найдено</div>
-                <div class="empty-desc">Попробуйте префиксную форму: <code style="font-family:'JetBrains Mono',monospace;background:rgba(255,255,255,0.06);padding:1px 4px;border-radius:3px;color:var(--orange);">обесценива*</code> вместо полного слова. FTS5 без стеммера — русская морфология лечится префиксами.</div>
-            </div>
-        `;
-        return;
-    }
-
-    body.innerHTML = data.hits.map(h => {
-        const snippetHtml = highlightSnippet(h.snippet);
-        return `
-            <div class="search-result" data-chat="${h.chat_id}" data-msg="${h.message_id}">
-                <div class="sr-head">
-                    <span class="sr-author">${escapeHtml(h.author)}</span>
-                    <span class="sr-date">${escapeHtml(h.date)}</span>
-                    <span class="sr-source ${h.source}">${h.source}</span>
-                </div>
-                <div class="sr-snippet">${snippetHtml}</div>
-            </div>
-        `;
-    }).join('');
-
-    body.querySelectorAll('.search-result').forEach(el => {
-        el.addEventListener('click', () => {
-            openPost(parseInt(el.dataset.chat), parseInt(el.dataset.msg));
-        });
-    });
-}
-
-function highlightSnippet(snippet) {
-    if (!snippet) return '';
-    // FTS5 возвращает сниппет с маркерами <<H>>..<</H>>
-    const escaped = escapeHtml(snippet);
-    return escaped.replace(/&lt;&lt;H&gt;&gt;/g, '<span class="hl">')
-                  .replace(/&lt;&lt;\/H&gt;&gt;/g, '</span>');
-}
-
-function renderPost(data) {
-    $('mid-title').textContent = 'Пост';
-    $('back-to-search').style.display = state.lastSearch ? 'inline-flex' : 'none';
-    $('mid-count').style.display = 'none';
-
-    const body = $('mid-body');
-    const post = data.post;
-    const authorInitial = (post.author || '?').replace('@', '').charAt(0).toUpperCase();
-    const chips = [];
-    if (post.is_comment) chips.push(`<span class="cnt pink"><i class="fas fa-comment"></i> комментарий</span>`);
-    if (post.from_linked_group) chips.push(`<span class="cnt orange"><i class="fas fa-link"></i> из linked-группы</span>`);
-    if (post.sender_type && post.sender_type !== 'user') chips.push(`<span class="cnt gray"><i class="fas fa-tag"></i> ${post.sender_type}</span>`);
-    if (post.media_path) chips.push(`<span class="cnt green"><i class="fas fa-paperclip"></i> ${escapeHtml(post.file_type || 'media')}</span>`);
-    if (post.reply_to_msg_id) chips.push(`<span class="cnt gray"><i class="fas fa-reply"></i> reply → ${post.reply_to_msg_id}</span>`);
-
-    const transcriptionHtml = data.transcription ? `
-        <div class="post-transcription">
-            <div class="tr-label"><i class="fas fa-microphone"></i> Транскрипция <code>${escapeHtml(data.transcription.model_type)}</code></div>
-            <div>${escapeHtml(data.transcription.text)}</div>
-        </div>
-    ` : '';
-
-    const comments = data.comments;
-    const commentsHtml = comments.items.length === 0 ? '' : `
-        <div class="comments-section">
-            <div class="comments-head"><i class="fas fa-comments"></i> ${comments.total} ${pluralize(comments.total, 'комментарий', 'комментария', 'комментариев')}${comments.total > comments.limit ? ` · показано ${comments.offset+1}–${Math.min(comments.offset+comments.limit, comments.total)}` : ''}</div>
-            ${comments.items.map(c => `
-                <div class="comment-row ${c.sender_type === 'channel' ? 'channel' : ''}">
-                    <span class="c-author">${escapeHtml(c.author)}</span>
-                    <span class="c-date">${escapeHtml(c.date)}</span>
-                    <div class="c-text">${escapeHtml(c.text || '[без текста]')}</div>
-                </div>
-            `).join('')}
-        </div>
-    `;
-
-    body.innerHTML = `
-        <div class="post-view">
-            <div class="post-header">
-                <div class="post-author-row">
-                    <div class="post-avatar">${escapeHtml(authorInitial)}</div>
-                    <div>
-                        <div class="post-author">${escapeHtml(post.author)}</div>
-                        <div class="post-date">${escapeHtml(post.date)} · chat_id=${post.chat_id} · message_id=${post.message_id}</div>
-                    </div>
-                </div>
-                <div class="post-meta-chips">${chips.join('')}</div>
-            </div>
-            <div class="post-body">${escapeHtml(post.text || '[без текста]')}</div>
-            ${transcriptionHtml}
-            ${commentsHtml}
-        </div>
-    `;
-}
-
-// ============================================================================
-// Actions
-// ============================================================================
-function doSearch() {
-    if (!state.currentArchiveId) {
-        setBanner('Сначала выберите архив слева.', 'error');
-        return;
-    }
-    const q = $('q-input').value.trim();
-    if (!q) {
-        setBanner('Введите поисковый запрос.', 'error');
-        return;
-    }
-    const args = { query: q };
-    const author = $('q-author').value.trim();
-    if (author) args.author = author;
-    const from = $('q-from').value;
-    if (from) args.date_from = from + 'T00:00:00';
-    const to = $('q-to').value;
-    if (to) args.date_to = to + 'T23:59:59';
-    sendOp('search', state.currentArchiveId, args);
-}
-
-function openPost(chatId, messageId) {
-    if (!state.currentArchiveId) return;
-    sendOp('read_post', state.currentArchiveId, { chat_id: chatId, message_id: messageId });
-}
-
-function escapeHtml(s) {
-    if (s == null) return '';
-    return String(s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
-
-function pluralize(n, one, few, many) {
-    const m10 = n % 10, m100 = n % 100;
-    if (m10 === 1 && m100 !== 11) return one;
-    if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
-    return many;
-}
-
-// ============================================================================
-// Bindings
-// ============================================================================
-$('q-btn').addEventListener('click', doSearch);
-$('q-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') doSearch();
+/* ================= РОУТИНГ ================= */
+window.addEventListener('hashchange', route);
+window.addEventListener('DOMContentLoaded', () => {
+  if (new URLSearchParams(location.search).get('debug') === '1') devToggle(true);
+  $('crumb-home').onclick = () => nav('#/');
+  wsConnect();
+  route();
 });
 
-$('back-to-search').addEventListener('click', () => {
-    if (state.lastSearch) renderSearchResults(state.lastSearch);
-});
+function route(){
+  const raw = location.hash.replace(/^#\/?/, '');
+  const [pathPart, queryPart] = raw.split('?');
+  const p = pathPart.split('/').filter(Boolean);
+  if (!p.length) { show('home'); return; }
+  if (p[0] === 'a' && p[1]){
+    if (!S.archive || S.archive.id !== p[1]){
+      // Архив ещё не открыт — запросим открытие
+      openArchive(p[1], /*navigate=*/false);
+      // После открытия route() вызовется снова через renderStart / renderShelf / renderReader
+      // А пока — покажем archive-скрин как загружающийся
+      show('archive');
+      return;
+    }
+    if (p[2] === 'shelf' && p[3])      renderShelf(p[3]);
+    else if (p[2] === 'search')        {
+      const q = new URLSearchParams(queryPart||'').get('q')||'';
+      if (q){ $('q-input').value = q; runSearch(q); }
+      else renderStart();
+    }
+    else if (p[2] === 'm' && p[3])     renderReader(parseInt(p[3],10));
+    else                               renderStart();
+    return;
+  }
+  show('home');
+}
+function nav(hash){ if (location.hash !== hash) location.hash = hash; else route(); }
+function go(view, arg){
+  if (!S.archive) return;
+  const a = S.archive.id;
+  if (view === 'start') nav(`#/a/${a}`);
+  if (view === 'shelf') nav(`#/a/${a}/shelf/${arg}`);
+}
 
-$('tool-shelves').addEventListener('click', () => {
-    if (!state.currentArchiveId) return alert('Сначала выберите архив.');
-    sendOp('list_shelves', state.currentArchiveId, {});
-});
+/* ================= ЭКРАНЫ ================= */
+function show(screen){
+  S.view = screen;
+  $('screen-home').classList.toggle('active', screen === 'home');
+  $('screen-archive').classList.toggle('active', screen !== 'home');
+  $('crumb-home').classList.toggle('visible', screen !== 'home');
+}
+function showView(v){
+  ['start','shelf','results','reader'].forEach(x => $('view-'+x).classList.toggle('active', x === v));
+  document.querySelectorAll('.toc-item').forEach(el => el.classList.remove('active'));
+  if (v === 'start') document.querySelector('[data-nav="start"]')?.classList.add('active');
+  if (v === 'shelf') document.querySelector(`[data-nav="shelf-${S.shelf}"]`)?.classList.add('active');
+}
 
-$('tool-stats').addEventListener('click', () => {
-    if (!state.currentArchiveId) return alert('Сначала выберите архив.');
-    sendOp('stats', state.currentArchiveId, { kind: 'overview' });
-});
+/* ---- Экран 1: список архивов (РЕАЛЬНЫЕ ДАННЫЕ) ---- */
+function renderHome(){
+  const grid = $('arch-grid');
+  if (!S.archives.length){
+    grid.innerHTML = `<div style="grid-column:1/-1;padding:40px 20px;text-align:center;color:var(--text-ter);font-size:0.84rem;">
+      <div style="font-size:2rem;margin-bottom:10px;">🐸</div>
+      Я не нашла ни одного архива.<br>
+      Скопируй папку из Rozitta Parser в <code>output/</code> и нажми «Обновить».
+    </div>`;
+    rzSay('home','empty','Я не нашла ни одного архива. Скопируй папку из Rozitta Parser в output и обновите страницу.');
+    return;
+  }
+  grid.innerHTML = S.archives.map(a => {
+    const m = a.messages_count || 0;
+    const r = a.transcriptions_count || 0;
+    const mWord = m === 1 ? 'сообщение' : m < 5 ? 'сообщения' : 'сообщений';
+    const rWord = r === 1 ? 'запись' : r < 5 ? 'записи' : 'записей';
+    const handle = a.username || '—';
+    return `<div class="arch-card" onclick="nav('#/a/${esc(a.id)}')">
+      <div class="ac-emoji">${a.emoji || '📦'}</div>
+      <div class="ac-name">${esc(a.title)}</div>
+      <div class="ac-handle"><code>${esc(handle)}</code> · ${esc(a.type_label || a.chat_type || '')}</div>
+      <div class="ac-counts">${m} ${mWord}${r ? ` · ${r} ${rWord}` : ''}</div>
+      <div class="ac-dates">${esc(a.date_period || '')}</div>
+      <div class="ac-open">Открыть →</div>
+    </div>`;
+  }).join('');
+  rzSay('home','home-hint','Выбери архив — и я помогу найти в нём что угодно.');
+}
 
-$('tool-whatsnew').addEventListener('click', () => {
-    if (!state.currentArchiveId) return alert('Сначала выберите архив.');
-    sendOp('whats_new', state.currentArchiveId, { limit: 50 });
-});
+/* ---- Открытие архива (РЕАЛЬНЫЕ ДАННЫЕ) ---- */
+function openArchive(id, navigate=true){
+  S.archive = null; S.shelves = []; S.statsData = null; S.whatsNew = [];
+  show('archive');
+  wsSend({op: 'open_archive', archive_id: id});
+  if (navigate) nav(`#/a/${id}`);
+}
 
-$('tool-reindex').addEventListener('click', () => {
-    if (!state.currentArchiveId) return alert('Сначала выберите архив.');
-    if (!confirm('Перестроить FTS-индекс? Может занять несколько секунд.')) return;
-    // POST /api/archives/{id}/reindex — отдельный HTTP, не через WS
-    fetch(`/api/archives/${encodeURIComponent(state.currentArchiveId)}/reindex`, { method: 'POST' })
-        .then(r => r.json())
-        .then(d => {
-            if (d.error) {
-                logLine('Ошибка перестройки: ' + d.error, 'error');
-            } else {
-                logLine('Индекс перестроен: ' + JSON.stringify(d.reindex), 'success');
-                $('footer-index').textContent = 'rebuilt';
-            }
-        })
-        .catch(e => logLine('HTTP ошибка: ' + e.message, 'error'));
-});
+function renderSidebarAfterOpen(){
+  // Вызывается после list_shelves и stats (могут приходить в любом порядке)
+  if (!S.archive) return;
+  const a = S.archive;
+  $('side-emoji').textContent = a.emoji || '📦';
+  $('side-name').textContent = a.title || a.id;
 
-$('clear-log').addEventListener('click', () => {
-    $('log-panel').innerHTML = '';
-});
+  // Полки из ответа list_shelves — это массив {kind, label, count}
+  // По спецификации полки = "messages" (Сообщения) и "transcriptions" (Записи)
+  let m = 0, r = 0;
+  if (Array.isArray(S.shelves)){
+    for (const sh of S.shelves){
+      if (sh.kind === 'messages') m = sh.count || 0;
+      if (sh.kind === 'transcriptions') r = sh.count || 0;
+    }
+  }
+  // Fallback на паспортные счётчики, если list_shelves ещё не пришёл
+  if (m === 0 && a.messages_count) m = a.messages_count;
+  if (r === 0 && a.transcriptions_count) r = a.transcriptions_count;
 
-$('frog-avatar').addEventListener('click', () => {
-    const f = $('frog-avatar');
-    f.classList.add('croaking');
-    setTimeout(() => f.classList.remove('croaking'), 400);
-    logLine('Квак! 🐸 Готова искать по архиву.', 'info');
-});
+  $('cnt-messages').textContent = m;
+  $('cnt-records').textContent = r;
+  $('toc-records').style.display = r ? 'flex' : 'none';
 
-// ============================================================================
-// Boot
-// ============================================================================
-connect();
+  // Сводка — частично из карточки, частично из stats
+  $('sum-handle').textContent = a.username || '—';
+  $('sum-type').textContent = a.type_label || a.chat_type || '—';
+  $('sum-dates').textContent = a.date_period || '—';
+  $('sum-msg').textContent = m;
+  $('sum-rec').textContent = r;
+
+  // Чипы — из паспорта (поле chips)
+  const chips = a.chips || [];
+  $('chips').innerHTML = chips.length
+    ? chips.map(c => `<span class="chip" onclick="chipSearch('${esc(c).replace(/'/g,"\\'")}')">${esc(c)}</span>`).join(' ')
+    : '<span style="color:var(--text-ter);font-size:0.72rem;">(нет примеров — начни печатать слово)</span>';
+}
+
+function renderStart(){
+  if (!S.archive) return;
+  const a = S.archive;
+  $('start-title').textContent = a.title;
+  const m = a.messages_count || 0;
+  const r = a.transcriptions_count || 0;
+  $('start-sub').textContent = `${a.type_label || a.chat_type} · ${m} сообщений${r?` · ${r} запись`:''} · ${a.date_period || ''}`;
+
+  // Последние сообщения — из whats_new (limit=3)
+  const recent = S.whatsNew || [];
+  if (recent.length){
+    $('start-recent').innerHTML = recent.map(i => msgCardReal(i, 'start')).join('');
+  } else {
+    $('start-recent').innerHTML = `<div style="color:var(--text-ter);padding:20px 0;font-size:0.8rem;">Загружаю последние сообщения…</div>`;
+  }
+  showView('start');
+  $('q-input').focus();
+  rzSay('side','first-open','Начни с поиска или загляни на полку слева. Не знаешь, что искать — попробуй слова под строкой поиска.');
+}
+
+/* Карточка сообщения из РЕАЛЬНОГО ответа whats_new
+ * Структура whats_new: { items: [{ internal_id, chat_id, message_id, author, date, text_preview, url }, ...] }
+ * Приводим к виду, удобному для UI.
+ */
+function msgCardReal(item, from='start'){
+  const id   = item.message_id || item.id || '?';
+  const text = item.text_preview || item.text || '';
+  const date = item.date || '';
+  const author = item.author || item.username || '';
+  // whats_new не отличает сообщения от записей — на UI-3/UI-4 добавим флаг
+  // через get_message. Пока считаем всё сообщением.
+  const isRec = false;
+  const preview = text.length > 150 ? text.slice(0, 150) + '…' : text;
+  return `<div class="msg-card" onclick="openReaderMock(${id},'${from}')" title="Читать (UI-4 — следующий заход)">
+    <div class="mc-head">
+      <span class="mc-id">#${esc(id)}</span>
+      <span class="mc-date">${esc(date)}</span>
+      <span class="mc-shelf ${isRec?'rec':''}">${isRec?'🎙 запись':'💬 сообщение'}</span>
+    </div>
+    <div class="mc-text">${esc(preview) || '<em>(без текста)</em>'}</div>
+    <div class="mc-read">Читать →</div>
+  </div>`;
+}
+
+/* ---- Экран 2: полка (РЕАЛЬНЫЕ ДАННЫЕ через whats_new с большим лимитом) ----
+ * Ограничение: whats_new сейчас не фильтрует по shelf. Для полки "messages"
+ * это ок (возвращаются последние N сообщений). Для полки "records" — будут
+ * показаны сообщения вперемешку. Когда добавим операцию list_shelf_items
+ * (или расширим whats_new параметром shelf) — заменим.
+ */
+function renderShelf(shelf){
+  if (!S.archive) return;
+  S.shelf = shelf;
+  wsSend({op: 'whats_new', archive_id: S.archive.id, args: {limit: 200}});
+  $('shelf-title').textContent = shelf === 'messages' ? '💬 Сообщения' : '🎙 Записи';
+  $('shelf-sub').textContent = 'Загружаю…';
+  $('shelf-list').innerHTML = '';
+  showView('shelf');
+  S._pendingShelf = shelf;
+}
+
+function renderShelfFromWhatsNew(shelf){
+  const items = S.whatsNew || [];
+  const n = items.length;
+  $('shelf-title').textContent = shelf === 'messages' ? '💬 Сообщения' : '🎙 Записи';
+  $('shelf-sub').textContent = `${n} на этой полке · сначала новые`;
+  $('shelf-list').innerHTML = n
+    ? items.map(i => msgCardReal(i, 'shelf')).join('')
+    : '<div style="color:var(--text-ter);padding:20px 0;font-size:0.8rem;">На этой полке ничего нет.</div>';
+  showView('shelf');
+}
+
+/* ================= UI-3/UI-4: ПОИСК И РИДЕР (mock) =================
+ * Пока не реализованы на бэке полностью (нет get_message, нет расширенной
+ * индексации комментариев), используем mock-данные из макета.
+ * Когда сделаем UI-3 и UI-4 — заменим на wsSend({op:'search', ...}) и
+ * wsSend({op:'get_message', ...}).
+ */
+function tokenize(q){ return q.toLowerCase().split(/\s+/).filter(t => t.length >= 2); }
+function matches(text, tokens){
+  const words = (text||'').toLowerCase().split(/[^а-яa-zё0-9]+/i);
+  return tokens.every(t => words.some(w => w.startsWith(t)));
+}
+function highlight(text, tokens){
+  if (!tokens.length) return esc(text);
+  const re = new RegExp('(^|[^а-яa-zё0-9])(' + tokens.map(t => t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|') + ')([а-яa-zё0-9]*)','gi');
+  return esc(text).replace(re, (m,pre,tok,rest) => pre + '<mark>' + tok + rest + '</mark>');
+}
+function snippet(text, tokens, len=170){
+  const lower = (text||'').toLowerCase();
+  let pos = 0;
+  for (const t of tokens){ const p = lower.indexOf(t); if (p >= 0){ pos = p; break; } }
+  let start = Math.max(0, pos - 60);
+  let cut = (text||'').slice(start, start + len);
+  return (start > 0 ? '…' : '') + cut + (start + len < (text||'').length ? '…' : '');
+}
+
+function toggleAdv(){
+  $('adv-panel').classList.toggle('open');
+  $('adv-toggle').classList.toggle('open');
+}
+function chipSearch(q){ $('q-input').value = q; doSearch(); }
+$('q-input').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+
+function doSearch(){
+  const q = $('q-input').value.trim();
+  if (!q) return;
+  nav(`#/a/${S.archive.id}/search?q=${encodeURIComponent(q)}`);
+}
+
+function runSearch(q){
+  // Mock-поиск: данные берём из S.mock по id архива.
+  // Когда сделаем UI-3 — заменим на wsSend({op:'search', archive_id, args:{query:q, ...}})
+  const mockDb = S.mock[S.archive.id];
+  if (!mockDb){
+    $('results-count').innerHTML = '';
+    $('results-list').innerHTML = `<div class="no-results"><div class="big">🚧</div>
+      Поиск будет доступен после реализации UI-3.<br>
+      Сейчас mock-поиск работает только для демо-архивов.</div>`;
+    showView('results');
+    return;
+  }
+  const tokens = tokenize(q);
+  const res = mockDb.items.filter(i => matches(i.text, tokens) || (i.comments||[]).some(c => matches(c.text, tokens)));
+  S.query = q; S.results = res;
+  devLog(`search (mock): "${q}" → ${res.length} hits`);
+  if (!res.length){
+    $('results-count').innerHTML = '';
+    $('results-list').innerHTML = `<div class="no-results"><div class="big">🐸</div>
+      По слову «${esc(q)}» я ничего не нашла.<br>Попробуй начало слова или другой корень — я ищу по началу слов.</div>`;
+  } else {
+    const n = res.length;
+    $('results-count').innerHTML = `Найдено: <b>${n}</b> совпадени${n===1?'е':n<5?'я':'й'} по запросу «${esc(q)}» <span style="color:var(--text-ter);font-size:0.74rem;">(mock — UI-3 в разработке)</span>`;
+    $('results-list').innerHTML = res.map(i => msgCardMock(i, tokens, 'results')).join('');
+    rzSay('side','first-hit','Нашла! Нажми «Читать», чтобы открыть сообщение целиком.');
+  }
+  showView('results');
+}
+
+function msgCardMock(item, tokens=[], from='start'){
+  const isRec = item.shelf === 'records';
+  let srcText = item.text, comBadge = '';
+  if (tokens.length && !matches(item.text, tokens)){
+    const c = (item.comments||[]).find(c => matches(c.text, tokens));
+    if (c){ srcText = c.text; comBadge = `<span class="mc-shelf com">↳ в комментарии</span>`; }
+  }
+  const body = tokens.length ? highlight(snippet(srcText, tokens), tokens) : esc(item.text.slice(0,150)) + (item.text.length>150?'…':'');
+  return `<div class="msg-card" onclick="openReaderMock(${item.id},'${from}')">
+    <div class="mc-head">
+      <span class="mc-id">#${item.id}</span>
+      <span class="mc-date">${esc(item.date)}</span>
+      ${comBadge}
+      <span class="mc-shelf ${isRec?'rec':''}">${isRec?'🎙 запись':item.voice?'🎙 аудио':'💬 сообщение'}</span>
+    </div>
+    <div class="mc-text">${body}</div>
+    <div class="mc-read">Читать →</div>
+  </div>`;
+}
+
+function openReaderMock(id, from){
+  const view = document.querySelector('.view.active');
+  const scroll = view ? view.scrollTop : 0;
+  if (from === 'results'){
+    const q = S.query, res = S.results;
+    S.backCtx = { label: `← К результатам («${q}», ${res.length})`,
+      restore(){ nav(`#/a/${S.archive.id}/search?q=${encodeURIComponent(q)}`); setTimeout(()=> $('view-results').scrollTop = scroll, 0); } };
+  } else if (from === 'shelf'){
+    const sh = S.shelf;
+    S.backCtx = { label: '← К полке',
+      restore(){ nav(`#/a/${S.archive.id}/shelf/${sh}`); setTimeout(()=> $('view-shelf').scrollTop = scroll, 0); } };
+  } else {
+    S.backCtx = { label: '← К обзору', restore(){ nav(`#/a/${S.archive.id}`); } };
+  }
+  nav(`#/a/${S.archive.id}/m/${id}`);
+}
+
+function renderReader(id){
+  // Mock-ридер: данные из S.mock
+  const mockDb = S.mock[S.archive ? S.archive.id : ''];
+  if (!mockDb){
+    $('rd-title').textContent = '🚧 UI-4 — следующий заход';
+    $('rd-author').textContent = '—';
+    $('rd-date').textContent = '—';
+    $('rd-body').innerHTML = `<p style="color:var(--text-sec);">Ридер будет подключён к реальному бэкенду после реализации операции <code>get_message</code> (спецификация §9).</p>`;
+    $('rd-tg').style.display = 'none';
+    $('rd-linked').innerHTML = '';
+    $('rd-comments').innerHTML = '';
+    $('rn-prev').disabled = true; $('rn-next').disabled = true;
+    $('reader-back').textContent = S.backCtx ? S.backCtx.label : '← Назад';
+    showView('reader');
+    return;
+  }
+  const item = mockDb.items.find(i => i.id === id);
+  if (!item) return;
+  S.readerItem = item;
+  const isRec = item.shelf === 'records';
+  const tokens = (S.query && S.results.some(r=>r.id===id)) ? tokenize(S.query) : [];
+  $('reader-back').textContent = S.backCtx ? S.backCtx.label : '← К обзору';
+  $('rd-title').textContent = (isRec ? 'Запись' : 'Сообщение') + ' #' + item.id;
+  $('rd-recplate').style.display = isRec ? 'inline-flex' : 'none';
+  $('rd-ava').textContent = (item.author||'@?').replace('@','')[0].toUpperCase();
+  $('rd-author').textContent = item.author;
+  $('rd-date').textContent = item.date;
+  $('rd-body').innerHTML = highlight(item.text, tokens);
+  $('rd-tg').style.display = isRec ? 'none' : 'inline-flex';
+  const handle = (mockDb.handle||'').replace('@','');
+  $('rd-tg').href = `https://t.me/${handle}/${item.id}`;
+  let links = '';
+  if (item.rec) links += `<button class="link-plate" onclick="openReaderMock(${item.rec},'results')">🎙 Есть расшифровка — читать</button>`;
+  if (item.src) links += `<button class="link-plate msg" onclick="openReaderMock(${item.src},'results')">💬 Исходное аудио-сообщение #${item.src}</button>`;
+  $('rd-linked').innerHTML = links;
+  const coms = item.comments || [];
+  $('rd-comments').innerHTML = coms.length
+    ? `<div class="rd-com-h">💬 Комментарии (${coms.length})</div>` + coms.map(c =>
+        `<div class="comment-row"><span class="c-author">${esc(c.author)}</span><span class="c-date">${esc(c.date)}</span><div class="c-text">${highlight(c.text, tokens)}</div></div>`).join('')
+    : '';
+  const shelfItems = mockDb.items.filter(i=>i.shelf===item.shelf).sort((x,y)=> x.d.localeCompare(y.d));
+  const idx = shelfItems.findIndex(i=>i.id===item.id);
+  const prev = shelfItems[idx-1], next = shelfItems[idx+1];
+  $('rn-prev').disabled = !prev; $('rn-next').disabled = !next;
+  $('rn-prev-t').textContent = prev ? `#${prev.id} · ${prev.date.split(',')[0]}` : '';
+  $('rn-next-t').textContent = next ? `#${next.id} · ${next.date.split(',')[0]}` : '';
+  $('rn-prev').dataset.id = prev?.id ?? ''; $('rn-next').dataset.id = next?.id ?? '';
+  showView('reader');
+  $('view-reader').scrollTop = 0;
+  const firstMark = $('rd-body').querySelector('mark');
+  if (firstMark) firstMark.scrollIntoView({block:'center'});
+}
+function rdNav(dir){
+  const id = $(dir<0?'rn-prev':'rn-next').dataset.id;
+  if (id) nav(`#/a/${S.archive.id}/m/${id}`);
+}
+function goBack(){
+  if (S.backCtx) S.backCtx.restore();
+  else if (S.archive) nav(`#/a/${S.archive.id}`);
+  else nav('#/');
+}
+
+/* ================= ПАНЕЛЬ РАЗРАБОТЧИКА ================= */
+let logoClicks = 0, logoTimer = null;
+$('logo').addEventListener('click', () => {
+  logoClicks++;
+  clearTimeout(logoTimer);
+  logoTimer = setTimeout(()=> logoClicks = 0, 600);
+  if (logoClicks >= 3){ logoClicks = 0; devToggle(); }
+});
+function devToggle(force){
+  const p = $('devpanel');
+  const open = force !== undefined ? force : !p.classList.contains('open');
+  p.classList.toggle('open', open);
+}
+function devLog(msg, level=''){
+  const t = new Date().toTimeString().slice(0,8);
+  const cls = level === 'ok' ? 'ok' : level === 'error' ? 'err' : level === 'warn' ? 'warn' : '';
+  const log = $('dp-log');
+  if (!log) return;
+  const span = `<span style="color:var(--text-ter)">${t}</span>`;
+  const arr  = level === 'error' ? '<span style="color:var(--error)">✗</span>' :
+               level === 'warn'  ? '<span style="color:var(--warning)">!</span>' :
+                                   '<span style="color:var(--success)">›</span>';
+  log.innerHTML += `<div>${span} ${arr} ${esc(msg)}</div>`;
+  log.scrollTop = 9e9;
+}
+function dpExec(){
+  const v = $('dp-op').value.trim();
+  if (!v) return;
+  // Простой парсер: "op archive_id {args json}"
+  const m = v.match(/^(\w+)\s+(\S+)?\s*(\{.*\})?\s*$/);
+  if (!m){
+    devLog(`неверный формат: "op archive_id {json}"`, 'error');
+    return;
+  }
+  const [, op, aid, argsJson] = m;
+  let args = {};
+  if (argsJson){ try { args = JSON.parse(argsJson); } catch { devLog('невалидный JSON', 'error'); return; } }
+  wsSend({op, archive_id: aid || '', args});
+  $('dp-op').value = '';
+}
+function dpCopy(){
+  navigator.clipboard?.writeText($('dp-log').innerText).then(()=> toast('Лог скопирован'));
+}
+
+/* ================= ДОБАВЛЕНИЕ АРХИВА ================= */
+function modalOpen(){ $('modal-add').classList.add('open'); }
+function modalClose(){ $('modal-add').classList.remove('open'); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') modalClose(); });
+function rescan(userFacing){
+  wsSend({op: 'scan_archives'});
+}
+function toast(msg){
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._h);
+  t._h = setTimeout(()=> t.classList.remove('show'), 2600);
+}
+
+/* Обновить dp-port и статус после hello */
+window.addEventListener('load', () => {
+  // Ничего — обработчик hello обновит
+});
 </script>
 </body>
 </html>

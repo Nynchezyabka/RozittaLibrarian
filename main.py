@@ -78,8 +78,8 @@ async def health():
 
 @app.get("/api/archives")
 async def api_list_archives():
-    """Список архивов в output/. Не открывает базы."""
-    return {"archives": core.list_archives_as_dict()}
+    """Список архивов в output/. Не открывает базы. Возвращает карточки (UI-спец. §2)."""
+    return {"archives": core.list_archives_as_cards()}
 
 
 @app.post("/api/archives/{archive_id}/open")
@@ -90,6 +90,16 @@ async def api_open_archive(archive_id: str):
     except Exception as e:
         log.exception("open_archive failed")
         return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@app.get("/api/archives/{archive_id}/card")
+async def api_archive_card(archive_id: str):
+    """Карточка архива для экрана 2 (UI-спец. §3): метаданные без открытия баз."""
+    archives = core.list_archives()
+    archive = next((a for a in archives if a.id == archive_id), None)
+    if archive is None:
+        return JSONResponse({"error": f"Архив не найден: {archive_id}"}, status_code=404)
+    return archive.to_card_dict()
 
 
 @app.post("/api/archives/{archive_id}/reindex")
@@ -190,10 +200,20 @@ async def _handle_op_sync(ws: WebSocket, op: str, archive_id: str, args: dict) -
 
     if op == "list_archives":
         await _ws_log(ws, "Сканирую папку output/ …")
-        archives = await asyncio.to_thread(core.list_archives_as_dict)
-        await _ws_log(ws, f"Найдено архивов: {len(archives)}",
-                      level="success" if archives else "warning")
-        return {"archives": archives}
+        cards = await asyncio.to_thread(core.list_archives_as_cards)
+        await _ws_log(ws, f"Найдено архивов: {len(cards)}",
+                      level="success" if cards else "warning")
+        return {"archives": cards}
+
+    if op == "scan_archives":
+        # Пересканировать output/ — детект новых архивов и изменений.
+        # Сейчас просто пересканируем discovery; дельта-переиндексация
+        # появится, когда будет хранение mtime в librarian.db.
+        await _ws_log(ws, "Пересканирую папку output/ …")
+        cards = await asyncio.to_thread(core.list_archives_as_cards)
+        await _ws_log(ws, f"Найдено архивов: {len(cards)}",
+                      level="success" if cards else "warning")
+        return {"archives": cards, "scanned_at": core.output_root.name}
 
     if op == "open_archive":
         await _ws_log(ws, f"Открываю архив «{archive_id}» …")
@@ -203,7 +223,9 @@ async def _handle_op_sync(ws: WebSocket, op: str, archive_id: str, args: dict) -
             await _ws_log(ws, f"Не удалось открыть: {e}", level="error")
             raise
         await _ws_log(ws, f"Архив открыт: {archive.passport.title}", level="success")
-        return archive.to_dict()
+        # Возвращаем и card (для оглавления/сводки/чипов), и полный паспорт —
+        # UI сам выберет, что нужно. Полный паспорт нужен для chat_id в ридере.
+        return {"card": archive.to_card_dict(), "passport": archive.to_dict()}
 
     if op == "search":
         query = (args.get("query") or "").strip()
@@ -261,11 +283,37 @@ async def _handle_op_sync(ws: WebSocket, op: str, archive_id: str, args: dict) -
 # Entrypoint
 # ---------------------------------------------------------------------------
 
+def _open_browser_after_delay(url: str, delay: float = 1.5) -> None:
+    """
+    Открыть дефолтный браузер на странице приложения через `delay` секунд.
+    Запускается в отдельном потоке — uvicorn.run блокирующий, поэтому
+    поток нужен, чтобы таймер сработал уже после того, как сервер начал слушать.
+    """
+    import threading
+    import webbrowser
+
+    def _open():
+        import time
+        time.sleep(delay)
+        try:
+            webbrowser.open(url, new=2, autoraise=True)
+        except Exception:
+            # Браузер может быть недоступен (безголовая система, контейнер).
+            # Не страшно — пользователь сам откроет URL из консоли.
+            log.warning("Не удалось открыть браузер автоматически. URL: %s", url)
+
+    t = threading.Thread(target=_open, name="browser-opener", daemon=True)
+    t.start()
+
+
 if __name__ == "__main__":
     import uvicorn
+    url = f"http://localhost:{PORT}"
     print(f"\n  Rozitta Librarian — порт {PORT}")
     print(f"  output root: {OUTPUT_ROOT}")
-    print(f"  http://localhost:{PORT}\n")
+    print(f"  {url}")
+    print(f"  (браузер откроется автоматически через 1.5 сек)\n")
+    _open_browser_after_delay(url, delay=1.5)
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
