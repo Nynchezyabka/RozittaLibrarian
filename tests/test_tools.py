@@ -320,3 +320,116 @@ def test_tool_list_shelves(opened):
     assert len(result["shelves"]) >= 1
     # Хотя бы одна полка должна иметь count > 0
     assert any(s["count"] > 0 for s in result["shelves"])
+
+
+# ---------------------------------------------------------------------------
+# Регрессионные тесты — Б1, Б2, Б3 (см. librarian_статус.md §Застряло)
+# ---------------------------------------------------------------------------
+
+def test_b1_stem_trims_russian_endings(opened_philosophy):
+    """Б1: поиск «зависти» обязан находить пост со словом «зависть».
+
+    Без обрезки окончаний «зависти*» НЕ матчит «зависть», потому что
+    префикс ищет по форме из вопроса. Замер 28.07: 62% → 88% после обрезки.
+    """
+    archive, parser_db, lib_db = opened_philosophy
+    hits = lib_db.search("зависти", limit=20)
+    assert len(hits) > 0, "Поиск «зависти» должен находить пост 800 про зависть"
+    # Пост 800 — основной; комменты 801–804 — дополнительно
+    found_post_800 = any(h.message_id == 800 for h in hits)
+    assert found_post_800, "В выдаче должен быть пост 800 («Зависть и сравнение»)"
+
+
+def test_b1_stem_handles_oblique_forms(opened_philosophy):
+    """Б1: «сравнения» должно находить тексты со словом «сравнение»."""
+    archive, parser_db, lib_db = opened_philosophy
+    hits = lib_db.search("сравнения", limit=20)
+    assert len(hits) > 0, "Поиск «сравнения» должен находить посты про сравнение"
+
+
+def test_b1_stopwords_filtered(opened_philosophy):
+    """Б1: «о зависти» — стоп-слово «о» выкинуть, искать только «зависть»."""
+    archive, parser_db, lib_db = opened_philosophy
+    hits = lib_db.search("о зависти", limit=20)
+    assert len(hits) > 0, "Стоп-слово «о» не должно ломать поиск"
+
+
+def test_b2_quotas_keep_author_posts(opened_philosophy):
+    """Б2: при quota_per_kind посты автора не тонут под комментариями.
+
+    Без квот: общий top-20 на демо-архиве философии в основном состоит
+    из комментариев (их 18, постов автора — 7). С квотой 5 на тип —
+    в выдаче обязательно присутствуют посты (is_comment=False).
+    """
+    archive, parser_db, lib_db = opened_philosophy
+    # Сначала — общая выдача, для сравнения
+    hits_no_quota = lib_db.search("обесценива", limit=20)
+    assert len(hits_no_quota) > 0
+
+    # С квотой 5 на тип
+    hits_quota = lib_db.search("обесценива", limit=20, quota_per_kind=5)
+    assert len(hits_quota) > 0
+
+    # В выдаче обязательно должны быть посты (is_comment=False)
+    has_posts = any(not h.is_comment for h in hits_quota)
+    assert has_posts, "При квотах в выдаче должны быть посты автора"
+
+    # И комментарии (is_comment=True)
+    has_comments = any(h.is_comment for h in hits_quota)
+    assert has_comments, "При квотах в выдаче должны быть комментарии"
+
+    # Каждый тип представлен не более чем quota_per_kind раз
+    n_posts = sum(1 for h in hits_quota if not h.is_comment and h.source == "message")
+    n_comments = sum(1 for h in hits_quota if h.is_comment and h.source == "message")
+    assert n_posts <= 5, f"Постов больше квоты: {n_posts}"
+    assert n_comments <= 5, f"Комментариев больше квоты: {n_comments}"
+
+
+def test_b3_external_transcripts_indexed(opened_philosophy):
+    """Б3: расшифровка из файла (по 00_Индекс.md) индексируется.
+
+    Пост 850 — голосовое, чья расшифровка лежит ТОЛЬКО файлом
+    (В14_п850_Проекция_и_идентификация.md), в таблице transcriptions
+    её нет. Без парсера 00_Индекс.md она не попадала бы в индекс.
+    """
+    archive, parser_db, lib_db = opened_philosophy
+    # Проверим, что в индексе есть документ-расшифровка для поста 850
+    with lib_db.cursor() as cur:
+        cur.execute(
+            "SELECT source, message_id, author FROM fts_doc "
+            "WHERE message_id = 850 AND source = 'transcription'"
+        )
+        rows = cur.fetchall()
+    assert len(rows) == 1, (
+        f"Должна быть 1 расшифровка для поста 850 из файла, найдено {len(rows)}"
+    )
+    # author хранит имя файла (маркер файлового происхождения)
+    assert "п850" in rows[0]["author"].lower() or "850" in rows[0]["author"]
+
+
+def test_b3_external_transcript_searchable(opened_philosophy):
+    """Б3: поиск по содержимому внешней расшифровки находит пост 850.
+
+    Слово «проекция» есть только в файле-расшифровке поста 850
+    (в самих сообщениях его нет). Если Б3 работает — поиск найдёт
+    пост 850 среди хитов.
+    """
+    archive, parser_db, lib_db = opened_philosophy
+    hits = lib_db.search("проекция", limit=20)
+    found_850 = any(h.message_id == 850 and h.source == "transcription"
+                    for h in hits)
+    assert found_850, (
+        "Поиск «проекция» должен находить расшифровку поста 850 из файла"
+    )
+
+
+def test_b3_parser_load_index_md(opened_philosophy):
+    """Б3: _load_index_transcripts корректно парсит 00_Индекс.md."""
+    archive, parser_db, lib_db = opened_philosophy
+    rows = lib_db._load_index_transcripts(archive.root)
+    assert len(rows) >= 1, "Должен найтись хотя бы один файл расшифровки"
+    # post_id, имя_файла, текст
+    post_id, name, text = rows[0]
+    assert post_id == 850
+    assert name.endswith(".md")
+    assert "проекция" in text.lower()

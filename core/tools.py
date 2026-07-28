@@ -52,6 +52,7 @@ def search(
     date_to: Optional[str] = None,
     source: Optional[str] = None,
     limit: int = SEARCH_MAX_RESULTS,
+    quota_per_kind: Optional[int] = None,
 ) -> dict:
     """
     FTS5-поиск по архиву.
@@ -71,6 +72,12 @@ def search(
                 ...
             ]
         }
+
+    Б2 (librarian_статус.md): если `quota_per_kind` задан — поиск идёт
+    двумя запросами (посты + комментарии) и сливается round-robin.
+    На реальном архиве это критично: иначе материал автора тонет под
+    комментариями. По умолчанию для UI — 5 на тип (4б: узкая выдача
+    лучше широкой).
     """
     query = (query or "").strip()
     if not query:
@@ -85,6 +92,7 @@ def search(
         date_to=date_to,
         source=source,
         snippet_size=SEARCH_SNIPPET_MAX,
+        quota_per_kind=quota_per_kind,
     )
 
     return {
@@ -94,6 +102,7 @@ def search(
             "date_from": date_from,
             "date_to": date_to,
             "source": source,
+            "quota_per_kind": quota_per_kind,
         },
         "count": len(hits),
         "hits": [

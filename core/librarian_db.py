@@ -47,7 +47,85 @@ LIBRARIAN_DB_FILENAME = "librarian.db"
 # v1: исходная схема (source, internal_id, chat_id, message_id, author, date, snippet)
 # v2: добавлены is_comment, post_message_id — для метки «↳ в комментарии» в поиске
 #     и навигации из поиска-по-комментарию в ридер родительского поста.
-INDEX_VERSION = 2
+# v3: тот же формат, но _prepare_query теперь обрезает русские окончания
+#     (стабильная эвристика из eval_fts.py: 62% → 88% recall на эталонном
+#     наборе). Старые librarian.db при открытии автоматически перестраиваются.
+INDEX_VERSION = 3
+
+
+# ---------------------------------------------------------------------------
+# Подготовка поискового запроса — порт из scripts/eval_fts.py
+# (см. librarian_статус.md §Б1). Без этой обрезки FTS5 молча возвращает 0
+# на запросе «зависти», потому что "зависти*" не матчит «зависть».
+# ---------------------------------------------------------------------------
+
+# Короткие служебные слова — отбрасываем до стемминга. Список намеренно
+# не агрессивный: он убирает только явный шум, остальное прореживают
+# требования MIN_TOKEN_LEN и токенизатор FTS5.
+_STOPWORDS = frozenset("""
+а без более больше будет будто бы был была были было быть в вам вас вдруг ведь
+весь во вот впрочем все всего всех вы где да даже два для до другой его ее ей
+если есть еще ещё же за здесь и из или им иногда их к как какая какой когда
+конечно кто куда ли лучше между меня мне много может мои мой мы на над надо
+наконец нас не него нее ней нельзя нет ни нибудь никогда ним них ничего но ну о
+об один он она они опять от очень перед по под после потом потому почти при про
+раз разве с сам свое своей свой себе себя сегодня сейчас со совсем так такой там
+тебя тем теперь то тогда того тоже той только том тот ту тут ты у уж уже хорошо
+хоть чего человек чем через что чтоб чтобы чуть эти этого этой этом этот эту я
+мной мною нам ними тобой чём этим этих какие каким который которая которые
+""".split())
+
+MIN_TOKEN_LEN = 3
+
+# Обрезка окончаний. Без неё префиксный поиск проваливается на падежах:
+# вопрос «о зависти» -> "зависти*" НЕ находит слово «зависть» в тексте.
+# Порядок важен: длинные окончания идут раньше коротких, чтобы снять
+# «ость» вместо «и», а «ился» вместо «а». Сортировка по убыванию длины.
+ENDINGS = sorted([
+    "ами", "ями", "ого", "его", "ому", "ему", "ыми", "ими", "ует", "уют",
+    "ает", "ают", "яет", "яют", "ить", "ать", "ять", "еть", "ыть", "ился",
+    "илась", "ется", "ются", "ость", "ений", "ения", "аний", "ания",
+    "ая", "яя", "ое", "ее", "ые", "ие", "ой", "ей", "ый", "ий", "ом", "ем",
+    "ах", "ях", "ам", "ям", "ов", "ев", "ью", "ия", "ии", "ла", "ло", "ли",
+    "а", "я", "о", "е", "ы", "и", "у", "ю", "ь", "й",
+], key=len, reverse=True)
+
+STEM_MIN = 4      # короче этого не режем — иначе «дом» → «до»
+STEM_CAP = 6      # и в любом случае не длиннее — «зависти» → «завист»
+
+
+def _stem(token: str, cap: int = STEM_CAP) -> str:
+    """Грубая обрезка до основы. Не лингвистика, а рабочая эвристика."""
+    if cap <= 0 or token.startswith("#"):
+        return token
+    t = token
+    for e in ENDINGS:
+        if t.endswith(e) and len(t) - len(e) >= STEM_MIN:
+            t = t[: len(t) - len(e)]
+            break
+    return t[:cap] if len(t) > cap else t
+
+
+def _tokenize_question(question: str) -> list[str]:
+    """Разбить вопрос пользователя на поисковые токены.
+
+    Шаги:
+    - lowercase + ё→е (совпадает с тем, что делает FTS5 unicode61
+      с remove_diacritics 2);
+    - выкинуть пунктуацию;
+    - оставить только токены длиннее MIN_TOKEN_LEN, не стоп-слова и
+      не чистые числа.
+    """
+    import re
+    q = (question or "").lower().replace("ё", "е")
+    q = re.sub(r"[«»\"'(),.!?:;—–\-]", " ", q)
+    raw = re.findall(r"[#\w]+", q, flags=re.UNICODE)
+    out = []
+    for t in raw:
+        if len(t) < MIN_TOKEN_LEN or t in _STOPWORDS or t.isdigit():
+            continue
+        out.append(t)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +384,7 @@ class LibrarianDB:
                 raise
 
         # Транскрипции (если таблица есть)
+        total_transcriptions_from_db = 0
         with self.cursor() as cur:
             cur.execute("BEGIN")
             try:
@@ -338,6 +417,7 @@ class LibrarianDB:
                     cur.execute("INSERT INTO fts_text(rowid, text) VALUES (?, ?)",
                                 (doc_rowid, text))
                     done += 1
+                    total_transcriptions_from_db += 1
                 cur.execute("COMMIT")
             except sqlite3.OperationalError as e:
                 # transcriptions может не быть — это нормально
@@ -347,15 +427,138 @@ class LibrarianDB:
                     cur.execute("ROLLBACK")
                     raise
 
+        # Б3: транскрипции из файлов — второй источник индекса.
+        # Transcriber пишет расшифровки как .md-файлы, связь «пост → файл»
+        # держит 00_Индекс.md (см. librarian_статус.md §Б3, CLAUDE.md п. 2а).
+        # Берём все файловые расшифровки, которых ЕЩЁ НЕТ в индексе (по message_id).
+        # Это покрывает: полностью пустую таблицу (как в архиве МГ), частично
+        # заполненную (часть в базе, часть файлами) и обычный случай (всё в базе).
+        total_transcriptions_from_files = 0
+        if parser_db.path.parent.exists():
+            file_rows = self._load_index_transcripts(parser_db.path.parent)
+            if file_rows:
+                # Какие message_id уже в индексе как transcription?
+                with self.cursor() as cur:
+                    cur.execute(
+                        "SELECT message_id, chat_id FROM fts_doc "
+                        "WHERE source = 'message' LIMIT 1"
+                    )
+                    r = cur.fetchone()
+                    fallback_chat_id = int(r["chat_id"]) if r and r["chat_id"] is not None else 0
+                    cur.execute(
+                        "SELECT message_id FROM fts_doc WHERE source = 'transcription'"
+                    )
+                    seen_msg_ids = {int(r["message_id"]) for r in cur.fetchall()}
+                with self.cursor() as cur:
+                    cur.execute("BEGIN")
+                    try:
+                        for post_id, name, text in file_rows:
+                            if post_id in seen_msg_ids:
+                                continue
+                            seen_msg_ids.add(post_id)
+                            cur.execute(
+                                "INSERT INTO fts_doc "
+                                "(source, internal_id, chat_id, message_id, author, date, snippet) "
+                                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                (
+                                    "transcription",
+                                    # синтетический id, чтобы не сталкиваться с messages
+                                    (int(post_id) << 32) | 0xDEAD,
+                                    fallback_chat_id,
+                                    int(post_id),
+                                    name,  # имя файла вместо автора — для отладки
+                                    None,
+                                    text[:300],
+                                ),
+                            )
+                            doc_rowid = cur.lastrowid
+                            cur.execute(
+                                "INSERT INTO fts_text(rowid, text) VALUES (?, ?)",
+                                (doc_rowid, text),
+                            )
+                            total_transcriptions_from_files += 1
+                            done += 1
+                        cur.execute("COMMIT")
+                    except Exception:
+                        cur.execute("ROLLBACK")
+                        raise
+
         self._set_meta("index_version", str(INDEX_VERSION))
         self._set_meta("built_at", str(int(time.time())))
 
         seconds = round(time.monotonic() - start, 2)
         return {
             "messages": total_messages,
-            "transcriptions": total_transcriptions,
+            "transcriptions": total_transcriptions_from_db + total_transcriptions_from_files,
+            "transcriptions_from_db": total_transcriptions_from_db,
+            "transcriptions_from_files": total_transcriptions_from_files,
             "seconds": seconds,
         }
+
+    # ------------------------------------------------------------------
+    # Б3: парсер 00_Индекс.md — вынесен в метод, чтобы переиспользовать
+    # при переиндексации и в юнит-тестах. Логика портирована из
+    # scripts/eval_fts.py:load_index_transcripts.
+    # ------------------------------------------------------------------
+
+    # Регэксп для markdown-ссылок [текст](цель)
+    import re as _re_module  # локальный импорт, чтобы не тащить наверх
+    _RE_MD_LINK = _re_module.compile(r"\[([^\]]*)\]\(([^)]+)\)")
+
+    @classmethod
+    def _load_index_transcripts(cls, folder: Path,
+                                index_name: str = "00_Индекс.md"
+                                ) -> list[tuple[int, str, str]]:
+        """Прочитать расшифровки с диска по 00_Индекс.md.
+
+        Возвращает [(post_id, имя_файла, полный_текст), ...].
+
+        Формат 00_Индекс.md (см. make_demo_archive.write_transcript_index):
+        pipe-таблица с колонками; первая ячейка-цифра — это post_id,
+        где-то в строке должна быть md-ссылка [..](файл.md).
+        Если 00_Индекс.md нет — пробуем *Индекс*.md (как в eval_fts).
+        """
+        folder = Path(folder)
+        idx = folder / index_name
+        if not idx.exists():
+            cands = sorted(folder.glob("*Индекс*.md"))
+            if not cands:
+                return []
+            idx = cands[0]
+
+        rows: list[tuple[int, str, str]] = []
+        for line in idx.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.startswith("|"):
+                continue
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            # Первое число в строке — это post_id
+            post: Optional[int] = None
+            for c in cells:
+                if c.isdigit():
+                    post = int(c)
+                    break
+            if post is None:
+                continue
+            # Ищем markdown-ссылку на .md-файл
+            link: Optional[str] = None
+            for c in cells:
+                for m in cls._RE_MD_LINK.findall(c):
+                    target = m[1]
+                    if target.lower().endswith(".md") or "transcript" in target.lower():
+                        link = target
+                        break
+                if link:
+                    break
+            if not link:
+                continue
+            # unquote для кириллицы и пробелов в имени файла
+            from urllib.parse import unquote
+            p = folder / unquote(link)
+            if not p.exists():
+                continue
+            text = p.read_text(encoding="utf-8", errors="replace")
+            rows.append((post, p.name, text))
+        return rows
 
     # -- queries ----------------------------------------------------------
 
@@ -369,35 +572,130 @@ class LibrarianDB:
         date_to: Optional[str] = None,
         source: Optional[str] = None,        # "message" | "transcription"
         snippet_size: int = 300,
+        quota_per_kind: Optional[int] = None,
     ) -> list[SearchHit]:
-        """
-        FTS5-поиск. query проходит через _prepare_query — превращает
-        «обесценива» → «обесценива*» для префиксных форм.
+        """FTS5-поиск с квотами по типу источника.
+
+        Б1 (librarian_статус.md): запрос проходит через _prepare_query,
+        которая обрезает русские окончания (`зависти` → `"завист"*`).
+
+        Б2: quota_per_kind — если задан, поиск идёт двумя запросами:
+        top-N среди `is_comment=0` (посты/сообщения автора) ПЛЮС top-N среди
+        `is_comment=1` (комментарии), потом слияние. Это критично на реальном
+        архиве: при 16 177 комментариях против 102 постов автора материал
+        автора не попадает в топ-10 ни разу при общей выдаче. Замер 28.07:
+        0/7 при общей выдаче, 7/7 при квотах.
+
+        Если `quota_per_kind` не задан — выдача общая (как раньше), для
+        обратной совместимости.
+
+        Фильтры:
+        - author: точное совпадение по `author`
+        - date_from/date_to: строковое сравнение ISO-дат
+        - source: "message" | "transcription" — оставить только один тип
         """
         fts_query = self._prepare_query(query)
         if not fts_query:
             return []
 
-        # Базовый FTS5-запрос с подсветкой и лимитом сниппета.
-        with self.cursor() as cur:
-            cur.execute(
-                "SELECT d.rowid, d.source, d.internal_id, d.chat_id, "
-                "       d.message_id, d.author, d.date, "
-                "       d.is_comment, d.post_message_id, "
-                "       snippet(fts_text, 0, '<<H>>', '<</H>>', '…', ?) AS snip "
-                "FROM fts_text JOIN fts_doc d ON d.rowid = fts_text.rowid "
-                "WHERE fts_text MATCH ? "
-                "ORDER BY rank "
-                "LIMIT ?",
-                (snippet_size // 6, fts_query, limit * 3),  # *3 для постфильтров
+        # Б2: если задана квота — два узких запроса и слияние.
+        if quota_per_kind is not None and source is None:
+            posts_hits = self._search_one(
+                fts_query,
+                limit=quota_per_kind,
+                author=author, date_from=date_from, date_to=date_to,
+                source="message", is_comment=False,
+                snippet_size=snippet_size,
             )
+            comments_hits = self._search_one(
+                fts_query,
+                limit=quota_per_kind,
+                author=author, date_from=date_from, date_to=date_to,
+                source="message", is_comment=True,
+                snippet_size=snippet_size,
+            )
+            # Если есть транскрипции — отдельная квота, обычно меньше
+            transcripts_hits = self._search_one(
+                fts_query,
+                limit=max(2, quota_per_kind // 2),
+                author=author, date_from=date_from, date_to=date_to,
+                source="transcription", is_comment=None,
+                snippet_size=snippet_size,
+            )
+            # Слияние round-robin: пост, коммент, пост, коммент…
+            # Учитываем общий `limit`.
+            merged: list[SearchHit] = []
+            seen_ids: set[int] = set()
+            for rank in range(max(len(posts_hits), len(comments_hits))):
+                if rank < len(posts_hits) and posts_hits[rank].rowid not in seen_ids:
+                    merged.append(posts_hits[rank])
+                    seen_ids.add(posts_hits[rank].rowid)
+                if rank < len(comments_hits) and comments_hits[rank].rowid not in seen_ids:
+                    merged.append(comments_hits[rank])
+                    seen_ids.add(comments_hits[rank].rowid)
+                if len(merged) >= limit:
+                    break
+            # Транскрипции добавляем в конец — у них отдельная метка
+            for h in transcripts_hits:
+                if h.rowid not in seen_ids and len(merged) < limit:
+                    merged.append(h)
+                    seen_ids.add(h.rowid)
+            return merged[:limit]
+
+        # Общая выдача — старый путь (когда квота не задана или указан source).
+        return self._search_one(
+            fts_query,
+            limit=limit,
+            author=author, date_from=date_from, date_to=date_to,
+            source=source, is_comment=None,
+            snippet_size=snippet_size,
+        )
+
+    def _search_one(
+        self,
+        fts_query: str,
+        *,
+        limit: int,
+        author: Optional[str],
+        date_from: Optional[str],
+        date_to: Optional[str],
+        source: Optional[str],
+        is_comment: Optional[bool],
+        snippet_size: int,
+    ) -> list[SearchHit]:
+        """Один FTS5-запрос с опциональным фильтром по типу источника."""
+        # Внимание на порядок ? в SQL: snippet_size (в SELECT) идёт ПЕРЕД
+        # fts_query (в WHERE). Поэтому args собираем в порядке появления ?.
+        where = ["fts_text MATCH ?"]
+        args: list = [snippet_size // 6, fts_query]
+
+        if source is not None:
+            where.append("d.source = ?")
+            args.append(source)
+        if is_comment is not None:
+            where.append("d.is_comment = ?")
+            args.append(1 if is_comment else 0)
+
+        sql = (
+            "SELECT d.rowid, d.source, d.internal_id, d.chat_id, "
+            "       d.message_id, d.author, d.date, "
+            "       d.is_comment, d.post_message_id, "
+            "       snippet(fts_text, 0, '<<H>>', '<</H>>', '…', ?) AS snip "
+            "FROM fts_text JOIN fts_doc d ON d.rowid = fts_text.rowid "
+            "WHERE " + " AND ".join(where) + " "
+            "ORDER BY rank "
+            "LIMIT ?"
+        )
+        # *3 — запас на пост-фильтрацию по author/date
+        args.append(limit * 3)
+
+        with self.cursor() as cur:
+            cur.execute(sql, args)
             rows = cur.fetchall()
 
         hits: list[SearchHit] = []
         for r in rows:
             if author and r["author"] != author:
-                continue
-            if source and r["source"] != source:
                 continue
             if date_from and r["date"] and r["date"] < date_from:
                 continue
@@ -424,30 +722,32 @@ class LibrarianDB:
 
     @staticmethod
     def _prepare_query(raw: str) -> str:
-        """
-        Подготовка FTS5-запроса:
-        - разбить на токены по пробелам;
-        - каждый токен превратить в префиксный (token*);
-        - не пытаемся парсить операторы AND/OR/NEAR — пользовательские
-          запросы обычно простые.
+        """Подготовка FTS5-запроса: вопрос пользователя → OR из префиксных термов.
 
-        Это покрывает ~90% русской морфологии (§7 риска), без лемматизатора.
+        Эвристика: токенизировать (lowercase + ё→е + выкинуть стоп-слова),
+        обрезать русские окончания (`stem()`), каждый терм обернуть в
+        `"стем"*`. Без обрезки «зависти» не находит «зависть» — проверено
+        замером 28.07: 62% → 88% recall.
+
+        Если пользователь уже передал FTS-синтаксис (кавычки, AND/OR/NEAR) —
+        не вмешиваемся: это расширенный режим для разработчика.
         """
         raw = (raw or "").strip()
         if not raw:
             return ""
-        # Если пользователь уже использует синтаксис FTS ("" или *), не вмешиваемся.
+        # Расширенный режим: пользователь сам знает, что делает.
         if '"' in raw or " NEAR " in raw or " AND " in raw or " OR " in raw:
             return raw
-        tokens = []
-        for tok in raw.split():
-            tok = tok.strip('"*')
-            if not tok:
-                continue
-            # Простой префиксный токен. Кавычки не нужны — токен без пробелов
-            # и так воспринимается как одно слово.
-            tokens.append(f"{tok}*")
-        return " ".join(tokens)
+        tokens = _tokenize_question(raw)
+        if not tokens:
+            return ""
+        parts, seen = [], set()
+        for t in tokens:
+            safe = _stem(t).replace('"', "")
+            if safe and safe not in seen:
+                seen.add(safe)
+                parts.append(f'"{safe}"*')
+        return " OR ".join(parts)
 
     def get_doc_by_rowid(self, rowid: int) -> Optional[FTSDoc]:
         with self.cursor() as cur:

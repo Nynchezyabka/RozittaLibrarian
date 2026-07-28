@@ -7,3 +7,6 @@ websockets>=12.0
 # (никаких внешних ORM — deliberate, см. librarian_рабочий_план.md §2)
 # Тесты
 pytest>=8.0
+# Замер качества поиска (scripts/eval_fts.py + eval_questions.yaml)
+# Не нужен для работы Librarian — только для прогона эталонных замеров
+pyyaml>=6.0

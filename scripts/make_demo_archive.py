@@ -105,6 +105,53 @@ DEMO_ARCHIVES = [
                 "text": "Итоги сентябрьского цикла: говорили про ценности, интерфейсы восприятия, обесценивание и привычки. Общая нить — внимание. Куда уходит внимание — туда уходит и жизнь.",
                 "comments": [],
             },
+            {
+                # Б1+Б2 regression: пост про зависть и сравнение.
+                # Без обрезки окончаний поиск «зависти» / «сравнения» молча
+                # вернёт 0 — это и есть эталонный пример из eval_questions.yaml.
+                # Без квот по типу источникa: 4 комментария (801–804) топят
+                # сам пост 800 в выдаче — это пример Б2.
+                "message_id": 800,
+                "date": "2024-10-05T11:00:00",
+                "username": "@philosophy_daily",
+                "sender_type": "channel",
+                "text": "Зависть и сравнение. Зависть — это всегда про сравнение себя с другим, причём невыгодное сравнение: берём чужой фасад и подставляем к нему свою изнанку. Зависть начинается там, где сравнение перестаёт быть инструментом и становится привычкой.",
+                "comments": [
+                    {"message_id": 801, "date": "2024-10-05T11:20:00", "username": "@marina_s", "text": "У меня зависть всегда вспыхивает к тем, у кого «всё легко». Думаю, привычка сравнивать себя идёт из детства."},
+                    {"message_id": 802, "date": "2024-10-05T11:35:00", "username": "@ivan_k", "text": "Сравнение как привычка — точно. Я ловлю себя на этом по 20 раз за день, и почти всегда невыгода придуманная."},
+                    {"message_id": 803, "date": "2024-10-05T12:00:00", "username": "@anna_p", "text": "А как отличить здоровое сравнение от зависти? Сравнение ради ориентира — одно, ради самоутверждения — другое."},
+                    {"message_id": 804, "date": "2024-10-05T12:15:00", "username": "@philosophy_daily", "text": "Зависть всегда имеет привкус несправедливости. Сравнение ради ориентира такого привкуса не несёт — оно техническое."},
+                ],
+            },
+            {
+                # Б3 regression: голосовое, чья расшифровка лежит ТОЛЬКО файлом
+                # в 00_Индекс.md — в таблице transcriptions её нет.
+                # Поле voice с пометкой "external_file" указывает демо-генератору
+                # положить файл-расшифровку отдельно и добавить запись в индекс.
+                "message_id": 850,
+                "date": "2024-10-06T19:00:00",
+                "username": "@philosophy_daily",
+                "sender_type": "channel",
+                "text": "Аудио-эфир «Проекция и идентификация». Слушайте запись или читайте расшифровку по ссылке в индексе.",
+                "voice_external": {
+                    "filename": "В14_п850_Проекция_и_идентификация.md",
+                    "transcription": (
+                        "Сегодня разбирали проекцию и идентификацию. Проекция — это когда "
+                        "человек приписывает другому свои собственные чувства или мысли. "
+                        "Идентификация — обратный ход: человек принимает чувства другого "
+                        "как свои. Зависть часто работает через проекцию: мы приписываем "
+                        "другому «лёгкость», а потом завидуем этой выдуманной лёгкости. "
+                        "Сравнение в этом случае превращается в comparing-mirror: мы "
+                        "сравниваем себя не с реальным человеком, а с его проекцией в "
+                        "нашей голове. Сорок минут поговорили про то, как замечать этот "
+                        "механизм и возвращать себе своё."
+                    ),
+                },
+                "comments": [
+                    {"message_id": 851, "date": "2024-10-06T19:30:00", "username": "@anna_p",
+                     "text": "Спасибо за расшифровку. Слушать не могу сейчас, почитать — самое то."},
+                ],
+            },
         ],
     },
     {
@@ -278,6 +325,58 @@ def write_passport(archive_root: Path, archive: dict) -> None:
     )
 
 
+def write_external_transcripts(archive_root: Path, archive: dict) -> list[tuple[int, str]]:
+    """Положить на диск расшифровки, которых НЕТ в parser.db.
+
+    Используется для теста Б3 (см. librarian_статус.md): когда Transcriber
+    пишет файлы .md, а не строки в `transcriptions`. Связь «пост → файл»
+    держит 00_Индекс.md в формате markdown-таблицы.
+
+    Возвращает [(post_id, имя_файла), ...] — для построения индекса.
+    """
+    written: list[tuple[int, str]] = []
+    for post in archive["posts"]:
+        ext = post.get("voice_external")
+        if not ext:
+            continue
+        # Лёгкая маркдаун-обёртка, как у Transcriber
+        md_body = (
+            f"# Расшифровка поста {post['message_id']}\n\n"
+            f"_{post['date']}_\n\n"
+            f"---\n\n"
+            f"{ext['transcription']}\n"
+        )
+        (archive_root / ext["filename"]).write_text(md_body, encoding="utf-8")
+        written.append((post["message_id"], ext["filename"]))
+    return written
+
+
+def write_transcript_index(archive_root: Path, archive: dict,
+                           externals: list[tuple[int, str]]) -> None:
+    """Сгенерировать 00_Индекс.md — таблица «пост → файл расшифровки».
+
+    Формат намеренно простой: pipe-таблица с колонками
+    «Пост | Дата | Файл расшифровки». Парсер в librarian_db.py понимает
+    такой формат (см. load_index_transcripts).
+    """
+    if not externals:
+        return
+    lines = [
+        "# Индекс расшифровок",
+        "",
+        "| Пост | Дата | Файл расшифровки |",
+        "|---|---|---|",
+    ]
+    # Возьмём дату из самого поста
+    posts_by_id = {p["message_id"]: p for p in archive["posts"]}
+    for post_id, filename in externals:
+        date = posts_by_id.get(post_id, {}).get("date", "")
+        lines.append(f"| {post_id} | {date} | [{filename}]({filename}) |")
+    (archive_root / "00_Индекс.md").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
+
+
 def main():
     output_root = Path(__file__).resolve().parent.parent / "output"
     output_root.mkdir(parents=True, exist_ok=True)
@@ -288,8 +387,11 @@ def main():
         db_path = archive_root / "parser.db"
         build_db(db_path, archive)
         write_passport(archive_root, archive)
+        # Б3: внешние расшифровки + 00_Индекс.md
+        externals = write_external_transcripts(archive_root, archive)
+        write_transcript_index(archive_root, archive, externals)
         # Удаляем старый librarian.db, чтобы при следующем открытии
-        # индекс пересобрался с новой схемой (v2).
+        # индекс пересобрался с новой схемой.
         old_lib = archive_root / "librarian.db"
         if old_lib.exists():
             old_lib.unlink()
@@ -299,7 +401,9 @@ def main():
             f = archive_root / f"librarian.db{suffix}"
             if f.exists():
                 f.unlink()
-        print(f"  ✓ {archive['id']}: {archive_root}")
+        n_ext = len(externals)
+        print(f"  ✓ {archive['id']}: {archive_root}"
+              + (f" (+{n_ext} внешних расшифровок)" if n_ext else ""))
 
     print(f"\nГотово. Демо-архивы созданы в: {output_root}")
 

@@ -7,6 +7,7 @@
 """
 import asyncio
 import json
+import os
 import sys
 
 try:
@@ -19,7 +20,7 @@ except ImportError:
     import websockets
 
 
-PORT = 8012
+PORT = int(os.environ.get("LIBRARIAN_PORT", "8011"))
 ARCHIVE_ID = "demo_philosophy_channel"
 TECH_ARCHIVE_ID = "demo_tech_forum"
 
@@ -77,7 +78,10 @@ async def main():
         print(f"    chips={a['chips']}  (на экране 1 — пусто, без открытия архива)")
         assert a["emoji"] == "📚"
         assert a["type_label"] == "канал"
-        assert a["date_period"] == "15 сен 2024 — 1 окт 2024"
+        # Период расширился после добавления поста 850 (Б3-демо)
+        assert a["date_period"] == "15 сен 2024 — 6 окт 2024", (
+            f"Период изменился: {a['date_period']!r}"
+        )
         # Чипы на home-экране НЕ вычисляются (без открытия librarian.db)
         assert a["chips"] == [], f"На home чипов быть не должно, got {a['chips']}"
         print("  PASS\n")
