@@ -517,14 +517,19 @@ class LibrarianDB:
         pipe-таблица с колонками; первая ячейка-цифра — это post_id,
         где-то в строке должна быть md-ссылка [..](файл.md).
         Если 00_Индекс.md нет — пробуем *Индекс*.md (как в eval_fts).
+
+        Если ни того, ни другого нет — fallback на рекурсивный поиск .md
+        файлов во вложенных папках (см. _scan_md_transcripts).
         """
         folder = Path(folder)
         idx = folder / index_name
         if not idx.exists():
             cands = sorted(folder.glob("*Индекс*.md"))
-            if not cands:
-                return []
-            idx = cands[0]
+            if cands:
+                idx = cands[0]
+            else:
+                # Fallback: рекурсивный поиск .md транскрипций.
+                return cls._scan_md_transcripts(folder)
 
         rows: list[tuple[int, str, str]] = []
         for line in idx.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -558,6 +563,100 @@ class LibrarianDB:
                 continue
             text = p.read_text(encoding="utf-8", errors="replace")
             rows.append((post, p.name, text))
+        return rows
+
+    # Имена файлов, которые НЕ являются транскрипциями:
+    # - *_fullchat.md — полный чат (всё в одном файле, не отдельная расшифровка)
+    # - 00_*.md, ИНДЕКС*.md, ИНСТРУКЦИЯ*.md, ОТЧЁТ*.md, CLAUDE.md, README.md —
+    #   служебные файлы
+    # - *_Сводная_таблица*.md, карта_*.csv — выгрузки
+    _MD_TRANSCRIPT_SKIP_PATTERNS = (
+        "_fullchat", "_full_chat", "00_", "индекс", "инструкция", "отчёт",
+        "отчет", "claude", "readme", "сводная", "карта_",
+    )
+
+    @classmethod
+    def _is_likely_transcript(cls, name: str) -> bool:
+        """Эвристика: похож ли .md файл на транскрипцию голосового сообщения?
+
+        Транскрипция обычно:
+        - содержит «post_NNN» в имени (пост-комментарии к посту NNN),
+        - или содержит «transcript» / «расшифровк» в имени,
+        - или лежит в подпапке, названной как сам архив.
+
+        Точно НЕ транскрипция:
+        - *_fullchat.md, *_full_chat.md — весь чат одним файлом,
+        - 00_*.md, ИНДЕКС*.md, ИНСТРУКЦИЯ*.md, ОТЧЁТ*.md, CLAUDE.md,
+          README.md, Сводная_таблица, карта_*.csv — служебные.
+        """
+        n = name.lower()
+        # Сразу отбрасываем служебные
+        for pat in cls._MD_TRANSCRIPT_SKIP_PATTERNS:
+            if pat in n:
+                return False
+        # Позитивные маркеры
+        if "post_" in n and "comment" in n:
+            return True
+        if "transcript" in n or "расшифровк" in n:
+            return True
+        # Если в имени есть число (например, post_1, 81, 84) — может быть
+        # транскрипцией. Берём как кандидат.
+        if re.search(r"\d{1,5}", n):
+            return True
+        return False
+
+    @classmethod
+    def _extract_post_id_from_name(cls, name: str) -> Optional[int]:
+        """Извлечь post_id из имени файла, если он там есть.
+
+        Примеры:
+          «Мастер Группа Макеевой Виолетты_post_84_comments_fullchat.md»
+            → post_84 → 84
+          «post_1_comments.md» → 1
+          «84.md» → 84
+          «transcript_15.md» → 15
+        """
+        # Сначала ищем явный маркер post_NNN
+        m = re.search(r"post[_\-]?(\d+)", name, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+        # Потом — любое число в начале или после _
+        m = re.search(r"(?:^|[_\-])(\d{1,6})(?:[_\-]|$|\.)", name)
+        if m:
+            return int(m.group(1))
+        return None
+
+    @classmethod
+    def _scan_md_transcripts(cls, folder: Path) -> list[tuple[int, str, str]]:
+        """Рекурсивный поиск .md файлов с транскрипциями.
+
+        Используется как fallback, если 00_Индекс.md не найден.
+        Сканирует folder и все подпапки, ищет .md файлы, похожие на
+        транскрипции (см. _is_likely_transcript). post_id извлекается
+        из имени файла (см. _extract_post_id_from_name).
+
+        Возвращает [(post_id, имя_файла, полный_текст), ...].
+        """
+        folder = Path(folder)
+        rows: list[tuple[int, str, str]] = []
+        try:
+            for p in folder.rglob("*.md"):
+                if not p.is_file():
+                    continue
+                if not cls._is_likely_transcript(p.name):
+                    continue
+                post_id = cls._extract_post_id_from_name(p.name)
+                if post_id is None:
+                    continue
+                try:
+                    text = p.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                if not text.strip():
+                    continue
+                rows.append((post_id, p.name, text))
+        except (OSError, PermissionError):
+            return rows
         return rows
 
     # -- queries ----------------------------------------------------------
@@ -663,7 +762,13 @@ class LibrarianDB:
         is_comment: Optional[bool],
         snippet_size: int,
     ) -> list[SearchHit]:
-        """Один FTS5-запрос с опциональным фильтром по типу источника."""
+        """Один FTS5-запрос с опциональными фильтрами.
+
+        Все фильтры (author, source, is_comment) применяются прямо в SQL —
+        это критично для author: если фильтровать в Python после LIMIT,
+        редкий автор не попадёт в топ-LIMIT*3 и пользователь получит 0
+        результатов, хотя у автора 800+ сообщений с этим словом.
+        """
         # Внимание на порядок ? в SQL: snippet_size (в SELECT) идёт ПЕРЕД
         # fts_query (в WHERE). Поэтому args собираем в порядке появления ?.
         where = ["fts_text MATCH ?"]
@@ -675,6 +780,27 @@ class LibrarianDB:
         if is_comment is not None:
             where.append("d.is_comment = ?")
             args.append(1 if is_comment else 0)
+        # ФИКС: фильтр по author — в SQL, не в Python.
+        # Сравнение делаем case-insensitive (COLLATE NOCASE) и поддерживаем
+        # оба варианта: с @ и без (пользователь может ввести как угодно).
+        if author is not None:
+            a = author.strip()
+            if a.startswith("@"):
+                where.append("(d.author = ? COLLATE NOCASE OR d.author = ? COLLATE NOCASE)")
+                args.append(a)
+                args.append(a[1:])
+            else:
+                where.append("(d.author = ? COLLATE NOCASE OR d.author = ? COLLATE NOCASE)")
+                args.append(a)
+                args.append("@" + a)
+        # Дата: ISO-строки сравниваются лексикографически, это работает для
+        # формата YYYY-MM-DDTHH:MM:SS. Используем >= и <=.
+        if date_from is not None:
+            where.append("d.date >= ?")
+            args.append(date_from)
+        if date_to is not None:
+            where.append("d.date <= ?")
+            args.append(date_to)
 
         sql = (
             "SELECT d.rowid, d.source, d.internal_id, d.chat_id, "
@@ -686,8 +812,8 @@ class LibrarianDB:
             "ORDER BY rank "
             "LIMIT ?"
         )
-        # *3 — запас на пост-фильтрацию по author/date
-        args.append(limit * 3)
+        # Все фильтры в SQL — не нужен запас. Берём ровно limit.
+        args.append(limit)
 
         with self.cursor() as cur:
             cur.execute(sql, args)
@@ -695,12 +821,6 @@ class LibrarianDB:
 
         hits: list[SearchHit] = []
         for r in rows:
-            if author and r["author"] != author:
-                continue
-            if date_from and r["date"] and r["date"] < date_from:
-                continue
-            if date_to and r["date"] and r["date"] > date_to:
-                continue
             snip = (r["snip"] or "").strip()
             if len(snip) > snippet_size:
                 snip = snip[:snippet_size].rstrip() + "…"
@@ -830,46 +950,116 @@ class LibrarianDB:
         "бы","ли","же","ведь","вот","это","эти","то","не","ни","нет","да",
         # прочие частые
         "один","два","три","раз","время","дело","человек","люди","всё","ничего",
+        # наречия/частицы, которые часто в топе, но не информативны
+        "просто","больше","вообще","очень","совсем","даже","ведь","конечно",
+        "значит","нужно","надо","можно","нельзя","должно","достаточно",
+        "сначала","потом","снова","опять","сейчас","сегодня","вчера","завтра",
+        "почему","потому","зачем","когда","где","там","тут","здесь","тогда",
+        "хорошо","плохо","лучше","хуже","быстрее","медленнее",
+        # частые местоименные и указательные (все падежи)
+        "этого","этому","этим","этими","этом","того","тому","тем","теми","том",
+        "такого","такому","таким","такими","таком","каждый","каждая","каждое",
+        "любой","любая","любое","любые","весь","всего","всему","всем","всеми",
+        # частые глаголы-связки и вспомогательные (не все глаголы —
+        # "понимать", "осознавать", "чувствовать" полезны для психологического
+        # архива и оставлены)
+        "делать","сказать","видеть","знать","хотеть","мочь","стать","стал",
+        "стала","стало","стали","быть","есть","спрашивать","ответить",
+        "подумать","подумал","подумала","казаться","кажется","казалось",
+        "получаться","получается","получилось","удаваться","удаётся",
     })
 
-    def top_terms(self, limit: int = 8, min_len: int = 6) -> list[str]:
+    def top_terms(self, limit: int = 8, min_len: int = 6,
+                  min_doc_freq: int = 5, max_len: int = 18) -> list[str]:
         """
         Топ-N частотных терминов архива — для чипов-примеров под строкой
-        поиска (UI-спец. §3). Использует fts5vocab в режиме 'row' —
-        документная частота (в скольких документах термин встречается).
+        поиска (UI-спец. §3).
+
+        Источник: fts5vocab в режиме 'col' — общая частота терминов
+        (сколько раз термин встречается во всех документах архива).
+        Это лучше, чем doc_freq (в скольких документах термин встречается),
+        потому что на реальном архиве с длинными постами многие осмысленные
+        слова встречаются 1-2 раза в каждом документе, но по многу раз —
+        и именно их пользователь захочет искать.
 
         Фильтры:
-        - длина >= min_len (по умолчанию 6 — отсекает «и», «но», «как», «или»);
+        - длина от min_len (6) до max_len (18) — отсекает короткие стоп-слова
+          и длинные склейки/URL;
         - только буквы (без цифр и пунктуации);
+        - min_total_freq (10): термин должен встречаться минимум 10 раз
+          во всём архиве. Отсекает редкие имена/опечатки/склейки.
         - не входит в стоп-слова.
+        - нет 5+ согласных подряд (отсекает склейки вида
+          «бабушкадействительно», «восприятияпостоянные» — FTS5 unicode61
+          не разделяет слова, написанные без пробелов).
 
-        Сортировка композитная: сначала по частоте (DESC), при равенстве —
-        по длине (DESC, длинные слова информативнее), затем по алфавиту.
-        На маленьких архивах, где у всех слов doc_freq=1, это даёт длинные
-        осмысленные термины вместо коротких стоп-слов.
+        Если после всех фильтров ничего не осталось (мелкий архив) —
+        fallback на min_total_freq=1 (лучше что-то, чем ничего).
 
         Возвращает список терминов (строк), без частот.
         """
         limit = max(1, min(int(limit or 8), 50))
-        with self.cursor() as cur:
-            # Создаём vocab-таблицу, если её нет. 'row' = (term, doc, col).
+        max_len = max(min_len + 1, int(max_len or 18))
+
+        def _query(cur, min_freq: int) -> list:
+            # 'col' mode: одна строка на (term, col), колонка cnt —
+            # сколько раз термин встречается в этой колонке.
+            # SUM(cnt) по всем колонкам = общая частота термина.
             cur.execute(
-                "CREATE VIRTUAL TABLE IF NOT EXISTS fts_vocab "
-                "USING fts5vocab(fts_text, 'row')"
-            )
-            # Группируем по term — COUNT(*) даёт документную частоту.
-            # Фильтр по длине и алфавиту — прямо в SQL, остальное (стоп-слова)
-            # проверяем в Python (список короткий).
-            cur.execute(
-                "SELECT term, COUNT(*) AS doc_freq "
-                "FROM fts_vocab "
-                "WHERE length(term) >= ? "
+                "SELECT term, SUM(cnt) AS total_freq "
+                "FROM fts_vocab_col "
+                "WHERE length(term) >= ? AND length(term) <= ? "
                 "GROUP BY term "
-                "ORDER BY doc_freq DESC, length(term) DESC, term ASC "
+                "HAVING total_freq >= ? "
+                "ORDER BY total_freq DESC, length(term) DESC, term ASC "
                 "LIMIT ?",
-                (min_len, limit * 10),  # ×10 — запас для стоп-слов
+                (min_len, max_len, min_freq, limit * 20),
             )
-            rows = cur.fetchall()
+            return list(cur.fetchall())
+
+        with self.cursor() as cur:
+            # Создаём vocab-таблицу в режиме 'col' — это даёт общую частоту.
+            cur.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS fts_vocab_col "
+                "USING fts5vocab(fts_text, 'col')"
+            )
+            rows = _query(cur, 10)
+            if not rows:
+                # Fallback: на маленьких архивах min_freq=10 слишком жёстко.
+                rows = _query(cur, 1)
+
+        # Русские гласные (для проверки структуры слова)
+        _VOWELS = set("аеёиоуыэюяaeiouy")
+        # Знак мягкий/твёрдый — не согласная и не гласная, но встречается в словах
+        _NEUTRAL = set("ьъ")
+
+        def _is_real_word(term: str) -> bool:
+            """Эвристика: похож ли терм на настоящее слово, а не на склейку.
+
+            Отбрасывает:
+            - только согласные / только гласные;
+            - 5+ согласных подряд (склейки без пробелов — частый артефакт
+              FTS5 unicode61 на текстах с плохим форматированием).
+            """
+            t = term.lower()
+            chars = [c for c in t if c.isalpha()]
+            has_v = any(c in _VOWELS for c in chars)
+            has_c = any(c not in _VOWELS and c not in _NEUTRAL for c in chars)
+            if not (has_v and has_c):
+                return False
+            # Считаем максимальную серию согласных подряд
+            max_cons = 0
+            cur_cons = 0
+            for c in chars:
+                if c in _VOWELS or c in _NEUTRAL:
+                    cur_cons = 0
+                else:
+                    cur_cons += 1
+                    if cur_cons > max_cons:
+                        max_cons = cur_cons
+            if max_cons >= 5:
+                return False
+            return True
 
         result: list[str] = []
         for r in rows:
@@ -878,6 +1068,8 @@ class LibrarianDB:
             if not term.isalpha():
                 continue
             if term.lower() in self._STOPWORDS_RU:
+                continue
+            if not _is_real_word(term):
                 continue
             result.append(term)
             if len(result) >= limit:

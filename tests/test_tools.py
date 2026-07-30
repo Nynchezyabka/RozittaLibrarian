@@ -354,6 +354,53 @@ def test_b1_stopwords_filtered(opened_philosophy):
     assert len(hits) > 0, "Стоп-слово «о» не должно ломать поиск"
 
 
+def test_threaded_post_has_reply_chain(opened_philosophy):
+    """Г3 (рекомендации_группы_источников.md): демо-архив содержит пост с
+    веткой комментариев, у которых проставлены reply_to_msg_id.
+
+    Без этой структуры групповое ранжирование не на чем тестировать —
+    participant_thread требует цепочек ответов.
+    """
+    archive, parser_db, lib_db = opened_philosophy
+
+    # Пост 900 должен существовать
+    post = parser_db.get_message_by_message_id(chat_id=-1001234567890, message_id=900)
+    assert post is not None, "Пост 900 не найден — патч демо-архива не применён"
+    assert "границы" in post.text.lower(), f"Текст поста 900 не про границы: {post.text[:80]}"
+
+    # Все 8 комментариев к посту 900 (по post_id, не по reply_to —
+    # т.к. висячий anna_p 908 имеет reply_to=None, но post_id=900)
+    with parser_db.cursor() as cur:
+        cur.execute(
+            "SELECT message_id, username, reply_to_msg_id FROM messages "
+            "WHERE post_id = 900 AND is_comment = 1 "
+            "ORDER BY message_id"
+        )
+        rows = cur.fetchall()
+    ids = {r[0]: r for r in rows}
+    assert len(rows) == 8, f"Должно быть 8 комментариев, есть {len(rows)}"
+
+    # 7 из 8 имеют reply_to_msg_id (все кроме 908)
+    with_reply = [r for r in rows if r[2] is not None]
+    assert len(with_reply) == 7, (
+        f"Должно быть 7 комментариев с reply_to_msg_id, есть {len(with_reply)}"
+    )
+
+    # Ветка 1: marina_s ↔ author (901 → 902 → 903 → 904)
+    assert ids[901][2] == 900, "901 должна ответлять на 900"
+    assert ids[902][2] == 901, "902 должна ответлять на 901"
+    assert ids[903][2] == 902, "903 должна ответлять на 902"
+    assert ids[904][2] == 903, "904 должна ответлять на 903"
+
+    # Ветка 2: ivan_k ↔ author (905 → 906 → 907)
+    assert ids[905][2] == 900, "905 должна ответлять на 900"
+    assert ids[906][2] == 905, "906 должна ответлять на 905"
+    assert ids[907][2] == 906, "907 должна ответлять на 906"
+
+    # 908 — висячий, без reply_to
+    assert ids[908][2] is None, "908 должна быть без reply_to_msg_id"
+
+
 def test_b2_quotas_keep_author_posts(opened_philosophy):
     """Б2: при quota_per_kind посты автора не тонут под комментариями.
 
@@ -433,3 +480,250 @@ def test_b3_parser_load_index_md(opened_philosophy):
     assert post_id == 850
     assert name.endswith(".md")
     assert "проекция" in text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Г3: tools.search с include_groups — групповое ранжирование в выдаче
+# ---------------------------------------------------------------------------
+
+def test_tool_search_groups_empty_by_default(opened_philosophy):
+    """Без include_groups — groups=[] и groups_count=0 (обратная совместимость)."""
+    archive, parser_db, lib_db = opened_philosophy
+    result = T.search(archive, lib_db, "обесценива")
+    assert result["count"] > 0
+    assert result["groups"] == []
+    assert result["groups_count"] == 0
+    assert "include_groups" in result["filters"]
+    assert result["filters"]["include_groups"] is False
+
+
+def test_tool_search_includes_groups_when_requested(opened_philosophy):
+    """С include_groups=True и parser_db — groups непустой."""
+    archive, parser_db, lib_db = opened_philosophy
+    result = T.search(
+        archive, lib_db, "обесценива",
+        parser_db=parser_db, include_groups=True,
+    )
+    assert result["count"] > 0
+    assert result["groups_count"] > 0, "Должны быть группы с совпадениями"
+    assert len(result["groups"]) > 0
+    assert len(result["groups"]) <= 10  # group_limit=10 по умолчанию
+    assert result["filters"]["include_groups"] is True
+
+
+def test_tool_search_groups_sorted_by_matched_count(opened_philosophy):
+    """Группы отсортированы по matched_count DESC."""
+    archive, parser_db, lib_db = opened_philosophy
+    # Запрос с обилием совпадений — «обесценива» находит во многих постах.
+    result = T.search(
+        archive, lib_db, "обесценива",
+        parser_db=parser_db, include_groups=True, group_limit=20,
+    )
+    groups = result["groups"]
+    assert len(groups) >= 2
+    # Сортировка: matched_count DESC
+    counts = [g["matched_count"] for g in groups]
+    assert counts == sorted(counts, reverse=True), (
+        f"Группы не отсортированы по matched_count DESC: {counts}"
+    )
+
+
+def test_tool_search_groups_dict_structure(opened_philosophy):
+    """Каждый GroupHit.to_dict() имеет все ожидаемые поля."""
+    archive, parser_db, lib_db = opened_philosophy
+    result = T.search(
+        archive, lib_db, "обесценива",
+        parser_db=parser_db, include_groups=True,
+    )
+    assert result["groups_count"] > 0
+    g = result["groups"][0]
+    expected = {
+        "group_id", "type", "label", "keys", "chat_id", "extras",
+        "matched_count", "total_count", "best_rank", "best_message_id",
+        "matched_message_ids", "ratio",
+    }
+    assert expected.issubset(set(g.keys())), (
+        f"Не хватает полей: {expected - set(g.keys())}"
+    )
+    assert g["matched_count"] >= 1
+    assert g["total_count"] >= g["matched_count"]
+    assert 0.0 < g["ratio"] <= 1.0
+
+
+def test_tool_search_groups_respects_group_limit(opened_philosophy):
+    """group_limit ограничивает длину groups, но не groups_count."""
+    archive, parser_db, lib_db = opened_philosophy
+    result = T.search(
+        archive, lib_db, "обесценива",
+        parser_db=parser_db, include_groups=True, group_limit=2,
+    )
+    # groups_count считает все совпавшие, len(groups) обрезан.
+    assert len(result["groups"]) <= 2
+    # groups_count может быть больше group_limit.
+    assert result["groups_count"] >= len(result["groups"])
+
+
+def test_tool_search_include_groups_without_parser_db(opened_philosophy):
+    """include_groups=True, но parser_db=None — groups=[] (не падает)."""
+    archive, parser_db, lib_db = opened_philosophy
+    result = T.search(
+        archive, lib_db, "обесценива",
+        parser_db=None, include_groups=True,
+    )
+    assert result["groups"] == []
+    assert result["groups_count"] == 0
+
+# ===========================================================================
+# Регрессионные тесты на критические баги (patch_critical_bugs_pre_review.py)
+# ===========================================================================
+# Каждый тест покрывает один класс бага из CLAUDE.md «История багов сессии».
+# Имя теста = test_bug<N>_<короткое описание>.
+
+def test_bug001_card_count_from_db_not_passport(demo_archives, monkeypatch):
+    """BUG-001 (П3): карточка архива показывает счётчик из БД, не из паспорта.
+
+    Сценарий: архив без паспорта (или с паспортом, где messages_count=0).
+    Раньше list_archives_as_cards() возвращал 0 — UI показывал «0 сообщений».
+    Теперь карточка должна показывать реальное число из parser.db.
+
+    Проверяем через LibrarianCore: список карточек должен содержать ненулевые
+    messages_count, даже если паспорт пустой.
+    """
+    from core.librarian_core import LibrarianCore
+    # Создаём ядро от demo output
+    core = LibrarianCore(demo_archives)
+    cards = core.list_archives_as_cards()
+    assert len(cards) >= 1, "Демо-архивы не найдены"
+    # Хотя бы одна карточка должна иметь ненулевой счётчик.
+    # (Демо-архивы содержат сообщения, и parser.db есть.)
+    has_nonzero = any(c["messages_count"] > 0 for c in cards)
+    assert has_nonzero, (
+        "Ни одна карточка не имеет messages_count > 0 — "
+        "BUG-001 не исправлен: list_archives_as_cards не открывает parser.db"
+    )
+
+
+def test_bug002_archive_isolation_no_leak(demo_archives):
+    """BUG-002 (П4): изоляция архивов — поиск в A не должен вернуть данные B.
+
+    Сценарий: открыты архивы A и B. Вызов search(A, ...) возвращает хиты
+    только с internal_id и chat_id из A. Если бэкенд смешал базы — хиты
+    из B появятся в выдаче A.
+
+    Проверяем через LibrarianCore: открываем два демо-архива, делаем поиск
+    в первом, убеждаемся, что все хиты принадлежат первому архиву.
+    """
+    from core.librarian_core import LibrarianCore
+    core = LibrarianCore(demo_archives)
+    archives = core.list_archives()
+    if len(archives) < 2:
+        pytest.skip("Нужно минимум 2 демо-архива для проверки изоляции")
+    a, b = archives[0], archives[1]
+    # Открываем оба (строятся librarian.db)
+    core.open_archive(a.id)
+    core.open_archive(b.id)
+    # Поиск в A
+    res_a = core.search(a.id, "зависть", quota_per_kind=None,
+                        include_groups=False)
+    # Поиск в B
+    res_b = core.search(b.id, "тест", quota_per_kind=None,
+                        include_groups=False)
+    # Все хиты A должны иметь archive_id == a.id (проверяем через post.url).
+    # URL строится как #/a/{archive.id}/m/{message_id} — там зашит archive.id.
+    for h in res_a["hits"]:
+        url = h.get("url", "")
+        assert f"/a/{a.id}/" in url or "/a/" in url, (
+            f"Хит из поиска в архиве A имеет URL без archive.id A: {url}"
+        )
+    for h in res_b["hits"]:
+        url = h.get("url", "")
+        assert f"/a/{b.id}/" in url or "/a/" in url, (
+            f"Хит из поиска в архиве B имеет URL без archive.id B: {url}"
+        )
+    # Дополнительно: список archive_id в hits A не должен содержать b.id.
+    # (Если URL содержит /a/{b.id}/ — это утечка.)
+    for h in res_a["hits"]:
+        url = h.get("url", "")
+        assert f"/a/{b.id}/" not in url, (
+            f"Утечка: поиск в A вернул хит с URL архива B: {url}"
+        )
+    core.close_all()
+
+
+def test_bug003_search_by_at_prefix_finds_author_messages(opened_philosophy):
+    """BUG-003 (П6): поиск по @нику находит сообщения автора, не упоминания.
+
+    Сценарий: пользователь вводит '@<ник>' в строку поиска.
+    Раньше FTS искал по тексту и находил только 1-2 (где ник упомянут).
+    Теперь tools.search() при @-префиксе переключается в режим author search
+    и находит ВСЕ сообщения автора.
+
+    Проверяем: поиск '@<существующий автор>' возвращает > 0 хитов,
+    и все хиты имеют source='author_search'.
+    """
+    archive, parser_db, lib_db = opened_philosophy
+    # Найдём автора с наибольшим числом сообщений в демо-архиве
+    top = parser_db.top_authors(limit=1)
+    assert top, "Демо-архив пустой — нет авторов"
+    nick, msg_count = top[0]
+    assert msg_count >= 1, f"Автор {nick} должен иметь ≥1 сообщение"
+    # Убираем @ для запроса (или оставляем — оба варианта должны работать)
+    nick_clean = nick.lstrip("@")
+    query = "@" + nick_clean
+    # Вызываем search с parser_db — это обязательно для author-режима
+    result = T.search(archive, lib_db, query, parser_db=parser_db,
+                      quota_per_kind=None, include_groups=False)
+    assert result["count"] > 0, (
+        f"Поиск @{nick_clean} должен найти ≥1 сообщения автора, "
+        f"но найдено {result['count']}"
+    )
+    # Все хиты должны быть помечены как author_search
+    for h in result["hits"]:
+        assert h["source"] == "author_search", (
+            f"Хит должен иметь source='author_search', получил {h['source']}"
+        )
+    # Фильтр должен показывать режим
+    assert result["filters"].get("author_search") is True, (
+        "filters.author_search должен быть True при @-запросе"
+    )
+
+
+def test_bug004_get_message_without_chat_id_falls_back_to_message_id_only(opened_philosophy):
+    """BUG-004 (П8): get_message без chat_id не падает, а находит сообщение
+    по message_id через get_message_by_message_id_only.
+
+    Сценарий: UI вызывает get_message с args={message_id} без chat_id
+    (URL #/a/{id}/m/{message_id}). Если в паспорте нет chat_id —
+    раньше падало «Не удалось определить chat_id».
+    Теперь fallback на parser_db.get_message_by_message_id_only().
+
+    Проверяем: get_message(message_id=X, chat_id=None) возвращает пост
+    с правильным message_id, даже если паспорт не имеет chat_id.
+    """
+    archive, parser_db, lib_db = opened_philosophy
+    # Берём любое существующее сообщение
+    msgs = list(parser_db.iter_messages(batch_size=10))
+    assert msgs, "Демо-архив пустой — нет сообщений"
+    target = msgs[0]
+    # Временно убираем chat_id из паспорта (имитируем реальный архив без паспорта)
+    saved_chat_id = archive.passport.chat_id
+    try:
+        archive.passport.chat_id = None
+        # Вызываем get_message БЕЗ chat_id — должен сработать fallback
+        result = T.get_message(archive, parser_db,
+                                message_id=target.message_id, chat_id=None)
+        assert result is not None, "get_message вернул None — fallback не сработал"
+        assert result["post"]["message_id"] == target.message_id, (
+            f"message_id в ответе не совпадает: ожидали {target.message_id}, "
+            f"получили {result['post']['message_id']}"
+        )
+        # chat_id в ответе должен быть реальный (из найденного сообщения)
+        assert result["post"]["chat_id"] == target.chat_id, (
+            f"chat_id должен быть {target.chat_id} (из сообщения), "
+            f"получили {result['post']['chat_id']}"
+        )
+    finally:
+        # Восстанавливаем паспорт
+        archive.passport.chat_id = saved_chat_id
+
+

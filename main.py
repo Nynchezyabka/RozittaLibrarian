@@ -37,7 +37,8 @@ from core.tools import ToolError
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-OUTPUT_ROOT = BASE_DIR / "output"
+OUTPUT_ROOT = BASE_DIR / "output"            # только для миграции при первом запуске
+REGISTRY_PATH = BASE_DIR / "config" / "registry.toml"
 # Порт по спеке — 8011. Можно переопределить через окружение LIBRARIAN_PORT,
 # если 8011 уже занят (например, другой копией Librarian в этом же контейнере).
 PORT = int(os.environ.get("LIBRARIAN_PORT", "8011"))
@@ -49,7 +50,9 @@ logging.basicConfig(
 log = logging.getLogger("librarian")
 
 app = FastAPI(title="Rozitta Librarian", version="0.1.0-stage1")
-core = LibrarianCore(OUTPUT_ROOT)
+# Реестр архивов в config/registry.toml. При первом запуске — миграция
+# архивов из output/ в реестр (см. ArchiveRegistry.migrate_from_output_dir).
+core = LibrarianCore.from_registry(REGISTRY_PATH, output_root=OUTPUT_ROOT)
 
 # Static files (favicon, etc.) — но index.html отдаём вручную, чтобы
 # добавить no-cache и убедиться, что корень — это всегда свежий UI.
@@ -126,6 +129,180 @@ async def api_stats(archive_id: str, kind: str = "overview", top_authors: int = 
         return core.stats(archive_id, kind=kind, top_authors=top_authors)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@app.get("/api/archives/{archive_id}/inspect")
+async def api_inspect(archive_id: str):
+    """Отладочный endpoint: полная диагностика архива — схема БД,
+    счётчики, FTS-статус. Используется, когда "0 сообщений" или
+    "ничего не ищется". Открывается в браузере как JSON.
+
+    Пример: http://localhost:8011/api/archives/my_archive/inspect
+    """
+    try:
+        return await asyncio.to_thread(core.archive_status, archive_id)
+    except Exception as e:
+        log.exception("inspect failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# Folder picker (для модалки "Добавить архив")
+# ---------------------------------------------------------------------------
+
+def _validate_browse_path(path: str) -> Path | None:
+    """Проверить путь: абсолютный, без '..', существует как папка.
+    Возвращает Path если ок, иначе None (клиент получит error)."""
+    if not path:
+        return None
+    try:
+        p = Path(path).resolve()
+    except (OSError, ValueError):
+        return None
+    if not p.is_absolute():
+        return None
+    # Проверка на '..' в компонентах (после resolve их быть не должно,
+    # но на всякий случай проверяем ещё раз)
+    if ".." in p.parts:
+        return None
+    if not p.exists() or not p.is_dir():
+        return None
+    return p
+
+
+@app.get("/api/browse")
+async def api_browse(path: str = ""):
+    """Список подкаталогов (только директории, только direct children).
+    Возвращает {path, dirs} или {error}."""
+    if not path:
+        # Пустой путь → отдаём домашнюю папку пользователя
+        path = str(Path.home())
+    p = _validate_browse_path(path)
+    if p is None:
+        return {"error": f"Недоступный путь: {path!r}"}
+    try:
+        dirs = []
+        files = []
+        for child in sorted(p.iterdir(), key=lambda c: c.name.lower()):
+            try:
+                if child.name.startswith("."):
+                    continue
+                if child.is_dir():
+                    dirs.append(str(child))
+                elif child.is_file():
+                    files.append({
+                        "name": child.name,
+                        "size": child.stat().st_size,
+                    })
+            except (OSError, PermissionError):
+                # Нет прав на чтение child — пропускаем
+                continue
+        return {"path": str(p), "dirs": dirs, "files": files}
+    except (OSError, PermissionError) as e:
+        return {"error": f"Не удалось прочитать папку: {e}"}
+
+
+@app.get("/api/drives")
+async def api_drives():
+    """Список корней (диски на Windows, '/' на Unix)."""
+    import platform
+    if platform.system() == "Windows":
+        # Пытаемся через psutil (если установлен)
+        try:
+            import psutil  # type: ignore
+            roots = [p.mountpoint for p in psutil.disk_partitions(all=False)]
+            if roots:
+                return {"roots": roots}
+        except ImportError:
+            pass
+        # Fallback: перебор букв (A-Z), проверяем существование
+        roots = []
+        for code in range(ord("C"), ord("Z") + 1):
+            letter = chr(code) + ":\\"
+            if Path(letter).exists():
+                roots.append(letter)
+        return {"roots": roots}
+    else:
+        # Unix: просто '/', но если есть /mnt и /media — добавим тоже
+        roots = ["/"]
+        for extra in ("/mnt", "/media"):
+            if Path(extra).exists() and Path(extra).is_dir():
+                try:
+                    # Добавим примонтированные точки (прямые потомки)
+                    for child in Path(extra).iterdir():
+                        if child.is_dir():
+                            roots.append(str(child))
+                except (OSError, PermissionError):
+                    pass
+        return {"roots": roots}
+
+
+
+# ---------------------------------------------------------------------------
+# Add-archive API (для модалки «Добавить архив»)
+# ---------------------------------------------------------------------------
+
+@app.post("/api/archives/detect")
+async def api_detect_archive(payload: dict):
+    """Предпросмотр source_type для выбранной папки.
+    Возвращает {ok, source_type?, hint?, error?}.
+    ok=False — не ошибка сервера, а «не похоже на архив» (200 OK)."""
+    path = (payload or {}).get("path", "")
+    if not path:
+        return {"ok": False, "error": "Пустой путь"}
+    try:
+        return await asyncio.to_thread(core.detect_source_type, path)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        log.exception("detect_archive failed")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/archives/add")
+async def api_add_archive(payload: dict):
+    """Добавить архив в реестр по пути.
+    Body: {path: str, id?: str}
+    → 200 {archive_id, source_type, path, card, already_registered?}
+    → 400 {error} (путь плохой / не похоже на архив)
+    """
+    path = (payload or {}).get("path", "").strip()
+    archive_id = (payload or {}).get("id", "").strip() or None
+    if not path:
+        return JSONResponse({"error": "Пустой путь"}, status_code=400)
+    try:
+        result = await asyncio.to_thread(core.add_archive, path, archive_id)
+        log.info("Archive added: id=%s source=%s path=%s already=%s",
+                 result["archive_id"], result["source_type"], result["path"],
+                 result.get("already_registered", False))
+        return result
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        log.exception("add_archive failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.delete("/api/archives/{archive_id}")
+async def api_remove_archive(archive_id: str):
+    """Удалить архив из реестра (файлы на диске остаются нетронутыми).
+
+    → 200 {archive_id, removed: true}
+    → 404 {error} (архив не найден в реестре)
+    → 500 {error}
+    """
+    try:
+        removed = await asyncio.to_thread(core.remove_archive, archive_id)
+        if not removed:
+            return JSONResponse(
+                {"error": f"Архив не найден в реестре: {archive_id}"},
+                status_code=404,
+            )
+        log.info("Archive removed: id=%s", archive_id)
+        return {"archive_id": archive_id, "removed": True}
+    except Exception as e:
+        log.exception("remove_archive failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ---------------------------------------------------------------------------
@@ -222,11 +399,79 @@ async def _handle_op_sync(ws: WebSocket, op: str, archive_id: str, args: dict) -
         except Exception as e:
             await _ws_log(ws, f"Не удалось открыть: {e}", level="error")
             raise
+        # Диагностика: сколько сообщений в parser.db и сколько в FTS.
+        # Если FTS пуст — поиск не даст результатов, пользователь должен видеть
+        # это в live-логе, чтобы понимать, что нужно сделать reindex.
+        status: dict = {}
+        try:
+            status = await asyncio.to_thread(core.archive_status, archive_id)
+        except Exception as e:
+            await _ws_log(ws, f"Не удалось собрать диагностику: {e}", level="warning")
+        real_msgs = status.get("messages_in_parser_db", 0)
+        fts_count = status.get("fts_doc_count", 0)
+        if real_msgs > 0:
+            await _ws_log(ws, f"В parser.db: {real_msgs} сообщений", level="success")
+        else:
+            await _ws_log(
+                ws,
+                "В parser.db 0 сообщений — возможно, таблица messages пуста "
+                "или schema не совпадает (ожидаются v1/v2).",
+                level="warning",
+            )
+            # Подробная схема: список таблиц, колонки messages, user_version
+            schema = status.get("schema") or {}
+            db_fn = status.get("db_filename", "?")
+            await _ws_log(ws, f"  Файл БД: {db_fn}", level="info")
+            uv = schema.get("user_version")
+            await _ws_log(ws, f"  PRAGMA user_version = {uv}", level="info")
+            tables = schema.get("tables") or []
+            if tables:
+                tbl_lines = ", ".join(
+                    f"{t['name']}={t['row_count']}" for t in tables[:20]
+                )
+                await _ws_log(ws, f"  Таблицы: {tbl_lines}", level="info")
+            else:
+                await _ws_log(ws, "  Таблицы: (нет ни одной)", level="warning")
+            if schema.get("messages_exists"):
+                cols = schema.get("messages_columns") or []
+                col_names = ", ".join(c["name"] for c in cols)
+                await _ws_log(
+                    ws, f"  Колонки messages: {col_names}", level="info")
+            else:
+                alts = schema.get("alternative_message_tables") or []
+                if alts:
+                    await _ws_log(
+                        ws,
+                        f"  Таблицы messages нет! Похожие: {', '.join(alts)}",
+                        level="warning",
+                    )
+                else:
+                    await _ws_log(
+                        ws,
+                        "  Таблицы messages нет и похожих не нашлось.",
+                        level="warning",
+                    )
+            await _ws_log(
+                ws,
+                "  Если схема отличается — пришлите мне выгрузку через "
+                "/api/archives/" + archive_id + "/inspect",
+                level="info",
+            )
+        if fts_count > 0:
+            await _ws_log(ws, f"FTS-индекс: {fts_count} документов", level="success")
+        else:
+            await _ws_log(
+                ws,
+                "FTS-индекс пуст — поиск ничего не найдёт. "
+                "Откройте Панель разработчика → Перестроить индекс.",
+                level="warning",
+            )
         await _ws_log(ws, f"Архив открыт: {archive.passport.title}", level="success")
-        # Карточка с динамическими чипами + полный паспорт (для chat_id и т.п.)
+        # Карточка с динамическими чипами + полный паспорт + диагностика
         return {
             "card": archive.to_card_dict(chips=chips),
             "passport": archive.to_dict(),
+            "status": status,
         }
 
     if op == "top_terms":
@@ -242,15 +487,26 @@ async def _handle_op_sync(ws: WebSocket, op: str, archive_id: str, args: dict) -
             await _ws_send(ws, "error", message="Пустой поисковый запрос")
             return None
         await _ws_log(ws, f"Ищу: «{query}» …")
-        # Прокидываем расширенные фильтры (UI-3 «Точный поиск»)
+        # Прокидываем расширенные фильтры (UI-3 «Точный поиск»).
+        # Г3: groups_count по умолчанию считается в core.search (см. патч 5).
         kwargs = {k: v for k, v in args.items() if k != "query"}
         result = await asyncio.to_thread(core.search, archive_id, query, **kwargs)
-        n = result["count"]
-        await _ws_log(
-            ws,
-            f"Найдено: {n} (лимит 20)",
-            level="success" if n > 0 else "warning",
-        )
+        n = result.get("count", 0)
+        gn = result.get("groups_count", 0)
+        # Группы в логе — чтобы пользователь видел, что найдены не просто
+        # разрозненные сообщения, а осмысленные ветки/циклы.
+        if gn > 0:
+            await _ws_log(
+                ws,
+                f"Найдено: {n} (лимит 20) · групп: {gn}",
+                level="success" if n > 0 else "warning",
+            )
+        else:
+            await _ws_log(
+                ws,
+                f"Найдено: {n} (лимит 20)",
+                level="success" if n > 0 else "warning",
+            )
         return result
 
     if op == "get_message":
@@ -305,12 +561,99 @@ async def _handle_op_sync(ws: WebSocket, op: str, archive_id: str, args: dict) -
         return await asyncio.to_thread(core.stats, archive_id, **args)
 
     if op == "whats_new":
-        await _ws_log(ws, "Что нового …")
+        shelf = args.get("shelf")
+        if shelf:
+            await _ws_log(ws, f"Что нового (полка: {shelf}) …")
+        else:
+            await _ws_log(ws, "Что нового …")
         return await asyncio.to_thread(core.whats_new, archive_id, **args)
 
     if op == "list_shelves":
         await _ws_log(ws, "Полки архива …")
         return await asyncio.to_thread(core.list_shelves, archive_id)
+
+    if op == "list_groups":
+        # Все группы архива (опционально одного типа).
+        # Г1+Г2: группы — единица смысла над сообщениями.
+        group_type = args.get("type")
+        await _ws_log(ws, "Собираю группы …")
+        groups = await asyncio.to_thread(core.list_groups, archive_id, group_type)
+        await _ws_log(
+            ws,
+            f"Групп: {len(groups)}",
+            level="success" if groups else "warning",
+        )
+        return {"archive_id": archive_id, "groups": groups, "count": len(groups)}
+
+    if op == "groups_for_message":
+        # Все группы, в которые входит данное сообщение.
+        message_id = args.get("message_id")
+        if message_id is None:
+            await _ws_send(ws, "error", message="Нужен message_id")
+            return None
+        chat_id = args.get("chat_id")
+        groups = await asyncio.to_thread(
+            core.groups_for_message, archive_id,
+            int(message_id), chat_id,
+        )
+        return {
+            "archive_id": archive_id,
+            "message_id": int(message_id),
+            "groups": groups,
+            "count": len(groups),
+        }
+
+    if op == "add_archive":
+        # Добавить архив в реестр (с автодетектом source_type).
+        # Live-логи: валидация → детект → добавление → пересборка discovery.
+        path = (args.get("path") or "").strip()
+        archive_id_arg = (args.get("id") or "").strip() or None
+        if not path:
+            await _ws_send(ws, "error", message="Пустой путь")
+            return None
+        await _ws_log(ws, f"Проверяю папку: {path} …")
+        try:
+            result = await asyncio.to_thread(
+                core.add_archive, path, archive_id_arg,
+            )
+        except ValueError as e:
+            await _ws_log(ws, str(e), level="error")
+            raise
+        await _ws_log(
+            ws,
+            f"Архив добавлен: {result['archive_id']} ({result['source_type']})",
+            level="success",
+        )
+        # Обновлённый список архивов — чтобы UI сразу перерисовал карточки
+        cards = await asyncio.to_thread(core.list_archives_as_cards)
+        return {
+            "archive_id": result["archive_id"],
+            "source_type": result["source_type"],
+            "path": result["path"],
+            "card": result["card"],
+            "archives": cards,
+        }
+
+    if op == "remove_archive":
+        # Удалить архив из реестра (файлы на диске остаются нетронутыми).
+        # Live-логи: закрытие БД → удаление из TOML → пересборка discovery.
+        await _ws_log(ws, f"Удаляю архив «{archive_id}» из реестра …")
+        try:
+            removed = await asyncio.to_thread(core.remove_archive, archive_id)
+        except Exception as e:
+            await _ws_log(ws, str(e), level="error")
+            raise
+        if not removed:
+            await _ws_log(ws, "Архив не найден в реестре", level="warning")
+            return {"archive_id": archive_id, "removed": False}
+        await _ws_log(
+            ws,
+            f"Архив «{archive_id}» удалён из реестра (файлы на диске сохранены)",
+            level="success",
+        )
+        # Обновлённый список архивов — чтобы UI сразу перерисовал карточки
+        cards = await asyncio.to_thread(core.list_archives_as_cards)
+        return {"archive_id": archive_id, "removed": True, "archives": cards}
 
     await _ws_send(ws, "error", message=f"Неизвестная операция: {op}")
     return None

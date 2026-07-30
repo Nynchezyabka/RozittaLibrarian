@@ -6,6 +6,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Rozitta Librarian — Читальный зал</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -112,7 +114,7 @@ button { font-family: 'Inter', sans-serif; }
 }
 .btn-ghost:hover { background: var(--surface-hov); color: var(--text); }
 .arch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
-.arch-card {
+.arch-card { position: relative;
     background: var(--surface); backdrop-filter: blur(14px);
     border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow);
     padding: 18px; cursor: pointer; transition: var(--t);
@@ -191,8 +193,13 @@ button { font-family: 'Inter', sans-serif; }
 .rz-avatar {
     width: 160px; height: 160px; border-radius: 50%;
     border: 2px solid var(--pink); box-shadow: 0 0 20px rgba(255,107,201,0.20);
-    background: linear-gradient(135deg, rgba(255,107,201,0.2), rgba(255,149,0,0.1));
+    background-image: url("/static/rozitta_idle.png");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-color: var(--surface-2, #2B2B2B);
     display: grid; place-items: center; font-size: 4.8rem; cursor: pointer; transition: var(--t);
+    overflow: hidden;
 }
 .rz-avatar:hover { transform: scale(1.08); box-shadow: 0 0 24px rgba(255,107,201,0.35); }
 .rz-name { font-size: 0.74rem; font-weight: 600; color: var(--pink); }
@@ -427,6 +434,22 @@ mark { background: var(--orange-soft); color: var(--orange); padding: 0 3px; bor
 .dp-log .ts { color: var(--text-ter); }
 .dp-log .ok { color: var(--success); }
 
+/* ============================================================
+   Z-INDEX HIERARCHY — слои UI от нижнего к верхнему
+
+     0     — основной контент (список архивов, лента сообщений)
+     100   — header (чипы фильтров, логотип)
+     300   — правая панель сообщений (reading-pane), devpanel
+     400   — .modal-back (фон модалки «Добавить архив»)
+     500   — .modal (сама модалка), .toast (всплывашки)
+     600   — .folder-overlay (фон folder picker'а)
+     601   — .folder-modal (folder picker)
+
+   Правило для нового слоя: поверх folder picker'а — z-index ≥ 700.
+   Слои «на одном уровне» (например, несколько модалок) использовать
+   один z-index и полагаться на порядок в DOM.
+   ============================================================ */
+
 /* ===== MODAL / TOAST ===== */
 .modal-back {
     position: fixed; inset: 0; z-index: 400; display: none;
@@ -485,6 +508,69 @@ mark { background: var(--orange-soft); color: var(--orange); padding: 0 3px; bor
 @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; transition: none !important; }
 }
+
+/* ============ FOLDER PICKER (из транскрайбера, тот же UX) ============ */
+.folder-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 600; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+.folder-overlay.show { opacity: 1; pointer-events: auto; }
+.folder-modal {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -48%);
+    z-index: 601; width: min(560px, 92vw); max-height: 80vh;
+    display: flex; flex-direction: column;
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--r);
+    box-shadow: var(--shadow); opacity: 0; pointer-events: none; transition: all 0.2s ease;
+}
+.folder-modal.show { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%); }
+.folder-head { padding: 14px 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.folder-head .fp-title { font-size: 0.9rem; font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.folder-head .fp-up { width: 32px; height: 32px; border-radius: var(--rsm); display: grid; place-items: center; background: var(--surface); border: 1px solid var(--border); color: var(--text-sec); cursor: pointer; transition: var(--t); flex-shrink: 0; }
+.folder-head .fp-up:hover { background: var(--surface-hov); color: var(--orange); }
+.folder-head .fp-up.disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+.folder-path { padding: 8px 16px; font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: var(--text-sec); background: var(--surface); border-bottom: 1px solid var(--border); word-break: break-all; flex-shrink: 0; }
+.folder-list { flex: 1; overflow-y: auto; padding: 6px 0; min-height: 180px; }
+.folder-item { padding: 9px 16px; display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.84rem; transition: var(--t); }
+.folder-item:hover { background: var(--surface-hov); }
+.folder-item i { color: var(--orange); font-size: 0.82rem; flex-shrink: 0; }
+.folder-empty { padding: 28px 16px; text-align: center; color: var(--text-sec); font-size: 0.8rem; }
+.folder-section { padding: 8px 16px 4px; font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-sec); opacity: 0.7; background: var(--surface); }
+.folder-file { padding: 7px 16px; display: flex; align-items: center; gap: 10px; cursor: default; font-size: 0.78rem; opacity: 0.5; }
+.folder-file i { color: var(--text-sec); font-size: 0.78rem; flex-shrink: 0; }
+.folder-file .folder-file-size { margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; opacity: 0.7; }
+.folder-empty i { font-size: 1.4rem; opacity: 0.4; margin-bottom: 8px; display: block; }
+.folder-foot { padding: 10px 16px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--border); flex-shrink: 0; }
+.folder-foot .fp-btn { padding: 7px 16px; border-radius: var(--rsm); font-size: 0.8rem; font-weight: 500; cursor: pointer; border: 1px solid var(--border); background: var(--surface); color: var(--text); transition: var(--t); }
+.folder-foot .fp-btn:hover { background: var(--surface-hov); }
+.folder-foot .fp-btn.primary { background: var(--orange); color: #1a1a1a; border-color: var(--orange); font-weight: 600; }
+.folder-foot .fp-btn.primary:hover { filter: brightness(1.08); }
+.fp-drives { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
+.fp-drives:empty { display: none; padding: 0; border-bottom: 0; }
+.fp-drive { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: var(--rsm); background: var(--bg); border: 1px solid var(--border); color: var(--text-sec); font-size: 0.74rem; font-family: 'JetBrains Mono', monospace; cursor: pointer; transition: var(--t); user-select: none; }
+.fp-drive i { font-size: 0.68rem; }
+.fp-drive:hover { background: var(--surface-hov); color: var(--orange); border-color: var(--orange); }
+.fp-drive.active { background: var(--orange-soft); color: var(--orange); border-color: var(--orange); font-weight: 600; }
+
+/* ============ ADD-ARCHIVE: чип детекта source_type ============ */
+.add-detect-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 10px; border-radius: var(--rsm);
+    font-size: 0.76rem; font-weight: 500;
+    background: var(--orange-soft); color: var(--orange);
+    border: 1px solid var(--orange);
+}
+.add-detect-chip.text { background: rgba(120, 180, 255, 0.12); color: #6ab0ff; border-color: #6ab0ff; }
+.add-detect-chip i { font-size: 0.74rem; }
+.add-detect-hint { font-size: 0.74rem; color: var(--text-sec); margin-left: 8px; }
+.add-detect-error { font-size: 0.76rem; color: #ff6b6b; display: flex; align-items: center; gap: 6px; }
+.add-detect-error i { font-size: 0.78rem; }
+.ac-remove {
+    position: absolute; top: 8px; right: 8px;
+    width: 22px; height: 22px; padding: 0;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text-ter); border-radius: var(--rsm);
+    cursor: pointer; font-size: 0.72rem; line-height: 1;
+    opacity: 0; transition: var(--t); display: flex; align-items: center; justify-content: center;
+}
+.arch-card:hover .ac-remove { opacity: 0.7; }
+.ac-remove:hover { color: var(--pink); border-color: var(--pink); opacity: 1 !important; }
 </style>
 </head>
 <body>
@@ -524,7 +610,7 @@ mark { background: var(--orange-soft); color: var(--orange); padding: 0 3px; bor
                         <button class="rz-close" onclick="rzClose('home')">✕</button>
                         <span id="rz-home-text">Выбери архив — и я помогу найти в нём что угодно.</span>
                     </div>
-                    <div class="rz-avatar">🐸</div>
+                    <div class="rz-avatar" aria-label="Розитта"></div>
                     <div class="rz-name">Розитта</div>
                 </div>
             </div>
@@ -559,11 +645,11 @@ mark { background: var(--orange-soft); color: var(--orange); padding: 0 3px; bor
                 </div>
 
                 <div class="rozitta" id="rz-side">
-                    <div class="rz-bubble" id="rz-side-bubble">
+                    <div class="rz-bubble" id="rz-side-bubble" style="display:none;">
                         <button class="rz-close" onclick="rzClose('side')">✕</button>
                         <span id="rz-side-text"></span>
                     </div>
-                    <div class="rz-avatar" title="Розитта-библиотекарь">🐸</div>
+                    <div class="rz-avatar" title="Розитта-библиотекарь" aria-label="Розитта"></div>
                     <div class="rz-name">Розитта</div>
                 </div>
             </aside>
@@ -586,9 +672,13 @@ mark { background: var(--orange-soft); color: var(--orange); padding: 0 3px; bor
                         </button>
                     </div>
                     <div class="adv-panel" id="adv-panel">
-                        <div><label>Автор</label><input id="q-author" placeholder="@username" class="mono"></div>
+                        <div><label>Автор <span style="opacity:0.6;font-size:0.62rem;">(ник без @)</span></label><input id="q-author" placeholder="например, MariaMariaButterfly" class="mono"></div>
                         <div><label>Дата от</label><input id="q-from" type="date" class="mono"></div>
                         <div><label>Дата до</label><input id="q-to" type="date" class="mono"></div>
+                    </div>
+                    <div style="margin-top:10px; padding-top:10px; border-top:1px dashed var(--border); font-size:0.7rem; color:var(--text-ter); line-height:1.5;">
+                        💡 Поиск идёт по <b>тексту сообщений</b> в <code>telegram_archive.db</code> + транскрипциям из <code>.md</code> файлов.
+                        Чтобы найти все сообщения автора — впишите его ник в поле «Автор» (без @).
                     </div>
                 </div>
 
@@ -650,22 +740,56 @@ mark { background: var(--orange-soft); color: var(--orange); padding: 0 3px; bor
 
 <!-- ============ МОДАЛКА: ДОБАВИТЬ АРХИВ ============ -->
 <div class="modal-back" id="modal-add" onclick="if(event.target===this)modalClose()">
-    <div class="modal">
+    <div class="modal" style="max-width:540px;">
         <div class="modal-t">＋ Добавить архив</div>
         <div class="modal-body">
-            Librarian показывает архивы, которые лежат в папке <code>output</code> рядом с программой.
-            <ol>
-                <li>Выгрузи чат или канал в <b>Rozitta Parser</b> — лучше всего подходит пресет «База знаний для ИИ».</li>
-                <li>Скопируй папку архива целиком в <code>output/</code>.</li>
-                <li>Нажми «Проверить папку» — новый архив появится в списке.</li>
-            </ol>
+            <div style="margin-bottom:14px; color:var(--text-sec); font-size:0.82rem;">
+                Выберите папку с архивом Rozitta Parser (где есть <code>parser.db</code>)
+                или папку с текстами (<code>.md</code>/<code>.txt</code>) — Librarian сам определит тип.
+            </div>
+
+            <label style="display:block; font-size:0.78rem; color:var(--text-sec); margin-bottom:6px;">Путь к папке</label>
+            <div style="display:flex; gap:8px; margin-bottom:10px;">
+                <input type="text" id="add-path" readonly
+                       placeholder="Нажмите «Выбрать…» и укажите папку"
+                       style="flex:1; padding:8px 10px; background:var(--surface); border:1px solid var(--border); border-radius:var(--rsm); color:var(--text); font-family:'JetBrains Mono',monospace; font-size:0.78rem;">
+                <button class="btn-add" onclick="addArchivePick()" type="button" style="flex-shrink:0;">Выбрать…</button>
+            </div>
+
+            <div id="add-detect" style="margin-bottom:12px; min-height:24px;"></div>
+
+            <label style="display:block; font-size:0.78rem; color:var(--text-sec); margin-bottom:6px;">
+                ID архива <span style="opacity:0.6;">(необязательно, по умолчанию — из имени папки)</span>
+            </label>
+            <input type="text" id="add-id" placeholder="напр., mg_archive_2024"
+                   style="width:100%; padding:8px 10px; background:var(--surface); border:1px solid var(--border); border-radius:var(--rsm); color:var(--text); font-family:'JetBrains Mono',monospace; font-size:0.78rem; margin-bottom:6px; box-sizing:border-box;">
+            <div style="font-size:0.72rem; color:var(--text-sec); opacity:0.7;">
+                Латиница, цифры, дефис и подчёркивание. Если ID уже занят — добавится суффикс <code>_2</code>, <code>_3</code>…
+            </div>
         </div>
         <div class="modal-actions">
-            <button class="btn-ghost" onclick="modalClose()">Закрыть</button>
-            <button class="btn-add" onclick="modalClose(); rescan(true)">Проверить папку</button>
+            <button class="btn-ghost" onclick="modalClose()" type="button">Отмена</button>
+            <button class="btn-add" id="add-submit" onclick="addArchiveSubmit()" type="button" disabled>Добавить</button>
         </div>
     </div>
 </div>
+<!-- ============ FOLDER PICKER ============ -->
+<div class="folder-overlay" id="fp-overlay"></div>
+<div class="folder-modal" id="folder-modal" role="dialog" aria-modal="true" aria-label="Выбор папки">
+    <div class="folder-head">
+        <i class="fas fa-folder-open" style="color:var(--orange);"></i>
+        <span class="fp-title" id="fp-title">Выбор папки</span>
+        <button class="fp-up" id="fp-up" title="На уровень вверх" type="button"><i class="fas fa-level-up-alt"></i></button>
+    </div>
+    <div class="folder-path" id="fp-path">/</div>
+    <div class="fp-drives" id="fp-drives"></div>
+    <div class="folder-list" id="fp-list"></div>
+    <div class="folder-foot">
+        <button class="fp-btn" id="fp-cancel" type="button">Отмена</button>
+        <button class="fp-btn primary" id="fp-ok" type="button">Выбрать</button>
+    </div>
+</div>
+
 
 <div class="toast" id="toast"></div>
 
@@ -719,7 +843,7 @@ mark { background: var(--orange-soft); color: var(--orange); padding: 0 3px; bor
  * ================================================================= */
 
 const $ = id => document.getElementById(id);
-const esc = s => (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const esc = s => (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 
 /* ================= СОСТОЯНИЕ ================= */
 const S = {
@@ -797,12 +921,27 @@ function handleWsMessage(msg){
     return;
   }
   if (msg.type === 'result'){
-    handleResult(msg.op, msg.data);
+    handleResult(msg.op, msg.data, msg.archive_id);
     return;
   }
 }
 
-function handleResult(op, data){
+function handleResult(op, data, archiveId){
+  // BUG-002 (П4): изоляция архивов. Если операция архиво-специфичная
+  // (whats_new, list_shelves, stats, search, get_message, list_groups,
+  // groups_for_message, top_terms) и archiveId не совпадает с S.archive?.id —
+  // это «старый» ответ от предыдущего архива, который уже закрыт.
+  // Игнорируем, чтобы не затереть свежие данные нового архива.
+  // archiveId передаётся из onMessage (msg.archive_id).
+  const ARCHIVE_SPECIFIC_OPS = new Set([
+    'open_archive','list_shelves','stats','whats_new','top_terms',
+    'search','get_message','read_post','list_groups','groups_for_message',
+  ]);
+  if (ARCHIVE_SPECIFIC_OPS.has(op) && archiveId && S.archive &&
+      archiveId !== S.archive.id){
+    devLog(`IGNORE op=${op} archiveId=${archiveId} (current=${S.archive.id}) — stale response`, 'warn');
+    return;
+  }
   if (op === 'list_archives' || op === 'scan_archives'){
     S.archives = data.archives || [];
     renderHome();
@@ -811,9 +950,43 @@ function handleResult(op, data){
     }
     return;
   }
+  if (op === 'remove_archive'){
+    if (data.removed){
+      toast('Архив удалён из реестра (файлы сохранены)');
+      S.archives = data.archives || [];
+      // Если удалили тот архив, который сейчас открыт — вернуться на главную
+      if (S.archive && S.archive.id === data.archive_id){
+        S.archive = null; S.archiveFull = null;
+        nav('#/');
+      }
+      renderHome();
+    } else {
+      toast('Архив не найден в реестре');
+    }
+    return;
+  }
   if (op === 'open_archive'){
     S.archive = data.card;
     S.archiveFull = data.passport;
+    S.archiveStatus = data.status || {};
+    // Если в карточке 0 сообщений, но status сообщает реальное число —
+    // подменяем (двойная страховка: open_archive_with_card уже подменяет
+    // passport, но если по какой-то причине карточка пришла с 0 — обновим).
+    if (S.archive && S.archiveStatus){
+      const realM = S.archiveStatus.messages_in_parser_db || 0;
+      if (realM > 0 && (!S.archive.messages_count || S.archive.messages_count === 0)){
+        S.archive.messages_count = realM;
+      }
+      const realR = S.archiveStatus.transcriptions_in_parser_db || 0;
+      if (realR > 0 && (!S.archive.transcriptions_count || S.archive.transcriptions_count === 0)){
+        S.archive.transcriptions_count = realR;
+      }
+      // Если и в parser.db 0 — это явно проблема со схемой.
+      if (realM === 0){
+        toast('В parser.db 0 сообщений — схема БД отличается. ' +
+              'Смотрите лог и /api/archives/' + (S.archive.id||'') + '/inspect');
+      }
+    }
     if (S.archive){
       wsSend({op: 'list_shelves', archive_id: S.archive.id});
       wsSend({op: 'stats',        archive_id: S.archive.id});
@@ -897,6 +1070,12 @@ function route(){
   const raw = location.hash.replace(/^#\/?/, '');
   const [pathPart, queryPart] = raw.split('?');
   const p = pathPart.split('/').filter(Boolean);
+  // Декодируем все компоненты пути: archive_id может содержать пробелы и
+  // кириллицу (например, "Мастер Группа"), которые браузер кодирует в URL.
+  // Без decodeURIComponent сравнение S.archive.id !== p[1] не сработает.
+  for (let i = 0; i < p.length; i++){
+    try { p[i] = decodeURIComponent(p[i]); } catch(e) { /* оставляем как есть */ }
+  }
   if (!p.length) { show('home'); return; }
   if (p[0] === 'a' && p[1]){
     if (!S.archive || S.archive.id !== p[1]){
@@ -920,11 +1099,20 @@ function route(){
   show('home');
 }
 function nav(hash){ if (location.hash !== hash) location.hash = hash; else route(); }
+/* navToArchive: строит hash с encodeURIComponent для archive_id.
+ * Используем в renderHome вместо прямого `#/a/${id}` — иначе id с пробелами
+ * и кириллицей попадёт в URL как есть, и browser сам его закодирует, но
+ * не во всех браузерах одинаково. Явное кодирование надёжнее.
+ */
+function navToArchive(id){ nav(`#/a/${encodeURIComponent(id)}`); }
+function navToArchiveShelf(id, shelf){ nav(`#/a/${encodeURIComponent(id)}/shelf/${shelf}`); }
+function navToArchiveSearch(id, q){ nav(`#/a/${encodeURIComponent(id)}/search?q=${encodeURIComponent(q)}`); }
+function navToMessage(id, mid, cmt){ nav(`#/a/${encodeURIComponent(id)}/m/${mid}${cmt?`?c=${cmt}`:''}`); }
 function go(view, arg){
   if (!S.archive) return;
   const a = S.archive.id;
-  if (view === 'start') nav(`#/a/${a}`);
-  if (view === 'shelf') nav(`#/a/${a}/shelf/${arg}`);
+  if (view === 'start') nav(`#/a/${encodeURIComponent(a)}`);
+  if (view === 'shelf') nav(`#/a/${encodeURIComponent(a)}/shelf/${arg}`);
 }
 
 /* ================= ЭКРАНЫ ================= */
@@ -959,7 +1147,13 @@ function renderHome(){
     const mWord = m === 1 ? 'сообщение' : m < 5 ? 'сообщения' : 'сообщений';
     const rWord = r === 1 ? 'запись' : r < 5 ? 'записи' : 'записей';
     const handle = a.username || '—';
-    return `<div class="arch-card" onclick="nav('#/a/${esc(a.id)}')">
+    // data-id вместо инлайн-onclick с экранированной строкой — надёжнее для
+    // id с кириллицей, пробелами и спецсимволами. Слушатель навешивается
+    // ниже через делегирование (один listener на grid).
+    return `<div class="arch-card" data-aid="${esc(a.id)}">
+      <button class="ac-remove" type="button"
+              data-aid="${esc(a.id)}"
+              title="Удалить архив из реестра (файлы на диске останутся)">✕</button>
       <div class="ac-emoji">${a.emoji || '📦'}</div>
       <div class="ac-name">${esc(a.title)}</div>
       <div class="ac-handle"><code>${esc(handle)}</code> · ${esc(a.type_label || a.chat_type || '')}</div>
@@ -968,7 +1162,43 @@ function renderHome(){
       <div class="ac-open">Открыть →</div>
     </div>`;
   }).join('');
+  // Делегирование кликов по карточкам и кнопкам ✕. Один listener на grid
+  // вместо инлайн-onclick — надёжнее для id с кириллицей/пробелами.
+  // Снимаем старый listener (если повторно вызываем renderHome) через clone.
+  const grid2 = grid.cloneNode(true);
+  grid.parentNode.replaceChild(grid2, grid);
+  grid2.addEventListener('click', e => {
+    const card = e.target.closest('.arch-card');
+    if (!card) return;
+    const aid = card.getAttribute('data-aid');
+    if (!aid) return;
+    // Клик по кнопке ✕ → подтверждение удаления
+    if (e.target.closest('.ac-remove')){
+      e.stopPropagation();
+      confirmRemoveArchive(aid);
+      return;
+    }
+    // Клик по карточке → открытие архива
+    navToArchive(aid);
+  });
   rzSay('home','home-hint','Выбери архив — и я помогу найти в нём что угодно.');
+}
+
+/* ---- Удаление архива из реестра ----
+ * Не физическое: файлы на диске остаются, запись убирается из registry.toml.
+ * Пользователь видит confirm() с пояснением, потом WS-операция.
+ *
+ * ВАЖНО: передаём только id (slug архива, гарантированно без спецсимволов).
+ * Title берём из S.archives — это надёжнее, чем пытаться экранировать
+ * произвольную строку для инлайн-onclick (предыдущая версия ломалась на
+ * кавычках и обратных косых).
+ */
+function confirmRemoveArchive(id){
+  const a = (S.archives || []).find(x => x.id === id);
+  const title = (a && (a.title || a.id)) || id;
+  if (!confirm('Удалить архив \u00AB' + title + '\u00BB из реестра?\n\n' +
+               'Файлы на диске останутся нетронутыми — архив можно будет добавить снова.')) return;
+  wsSend({op: 'remove_archive', archive_id: id});
 }
 
 /* ---- Открытие архива ---- */
@@ -977,7 +1207,7 @@ function openArchive(id, navigate=true){
   S.searchResults = []; S.readerMsg = null;
   show('archive');
   wsSend({op: 'open_archive', archive_id: id});
-  if (navigate) nav(`#/a/${id}`);
+  if (navigate) nav(`#/a/${encodeURIComponent(id)}`);
 }
 
 function renderSidebarAfterOpen(){
@@ -1053,14 +1283,13 @@ function msgCardFromWhatsNew(item, from='start'){
 }
 
 /* ---- Полка ----
- * whats_new сейчас не фильтрует по shelf. Для полки "messages" это ок.
- * Для полки "records" — будут показаны сообщения вперемешку. Когда добавим
- * фильтр по shelf в whats_new — заменим.
+ * whats_new теперь фильтрует по shelf: 'messages' (все) или 'records'
+ * (только голосовые с транскрипцией). Передаём shelf в args.
  */
 function renderShelf(shelf){
   if (!S.archive) return;
   S.shelf = shelf;
-  wsSend({op: 'whats_new', archive_id: S.archive.id, args: {limit: 200}});
+  wsSend({op: 'whats_new', archive_id: S.archive.id, args: {limit: 200, shelf: shelf}});
   $('shelf-title').textContent = shelf === 'messages' ? '💬 Сообщения' : '🎙 Записи';
   $('shelf-sub').textContent = 'Загружаю…';
   $('shelf-list').innerHTML = '';
@@ -1075,7 +1304,9 @@ function renderShelfFromWhatsNew(shelf){
   $('shelf-sub').textContent = `${n} на этой полке · сначала новые`;
   $('shelf-list').innerHTML = n
     ? items.map(i => msgCardFromWhatsNew(i, 'shelf')).join('')
-    : '<div style="color:var(--text-ter);padding:20px 0;font-size:0.8rem;">На этой полке ничего нет.</div>';
+    : (shelf === 'records'
+        ? '<div style="color:var(--text-ter);padding:20px 0;font-size:0.8rem;">На этой полке ничего нет. Записи (голосовые с расшифровкой) появляются, когда Rozitta Transcriber сохранит расшифровки в БД или в .md-файлы рядом с архивом.</div>'
+        : '<div style="color:var(--text-ter);padding:20px 0;font-size:0.8rem;">На этой полке ничего нет.</div>');
   showView('shelf');
 }
 
@@ -1097,7 +1328,7 @@ function chipSearch(q){
 function doSearch(){
   const q = $('q-input').value.trim();
   if (!q) return;
-  nav(`#/a/${S.archive.id}/search?q=${encodeURIComponent(q)}`);
+  nav(`#/a/${encodeURIComponent(S.archive.id)}/search?q=${encodeURIComponent(q)}`);
 }
 
 /* runSearch — посылает WS-операцию search с расширенными фильтрами */
@@ -1128,9 +1359,15 @@ function renderSearchResults(){
   const n = hits.length;
   if (!n){
     $('results-count').innerHTML = '';
+    // Подсказка: если запрос похож на ник (без пробелов, латиница/цифры),
+    // предлагаем поискать по автору через фильтр «Точный поиск → Автор».
+    const looksLikeNick = /^[a-zA-Z0-9_@]+$/.test(q);
+    const authorHint = looksLikeNick
+      ? `<br><br>Если «${esc(q)}» — это ник автора, нажми «Точный поиск» и впиши его в поле «Автор».<br>Поиск по тексту находит только те сообщения, где ник <em>упоминается в тексте</em>, а не все сообщения автора.`
+      : '';
     $('results-list').innerHTML = `<div class="no-results"><div class="big">🐸</div>
       По слову «${esc(q)}» я ничего не нашла.<br>
-      Попробуй начало слова или другой корень — я ищу по началу слов.</div>`;
+      Попробуй начало слова или другой корень — я ищу по началу слов.${authorHint}</div>`;
     rzSay('side','zero-results',`По слову «${q}» ничего не нашла. Попробуй начало слова или другой корень.`);
     return;
   }
@@ -1152,13 +1389,20 @@ function searchHitCard(h){
   const targetId = isComment && h.post_message_id ? h.post_message_id : h.message_id;
   const commentId = isComment ? h.message_id : null;
   const snippetHtml = highlightSnippet(h.snippet || '');
+  // BUG-003: помечаем режим поиска по автору
+  const isAuthorSearch = h.source === 'author_search';
   const shelfLabel = h.source === 'transcription'
     ? '🎙 расшифровка'
-    : isComment
-      ? '↳ в комментарии'
-      : '💬 сообщение';
-  const shelfClass = h.source === 'transcription' ? 'rec' : (isComment ? 'com' : '');
-  return `<div class="msg-card" onclick="openReader(${targetId}, ${commentId ? commentId : 'null'}, 'results')" style="cursor:pointer;">
+    : isAuthorSearch
+      ? '👤 по автору'
+      : isComment
+        ? '↳ в комментарии'
+        : '💬 сообщение';
+  const shelfClass = h.source === 'transcription' ? 'rec' : (isAuthorSearch ? 'author' : (isComment ? 'com' : ''));
+  // BUG-004 (П8): передаём chat_id из hit в openReader, чтобы get_message
+  // не падал с «chat_id не определён» на реальном архиве без паспорта.
+  const chatId = h.chat_id || null;
+  return `<div class="msg-card" onclick="openReader(${targetId}, ${commentId ? commentId : 'null'}, 'results', ${chatId})" style="cursor:pointer;">
     <div class="mc-head">
       <span class="mc-id">#${esc(targetId)}</span>
       <span class="mc-date">${esc(formatDateShort(h.date))}</span>
@@ -1184,7 +1428,7 @@ function highlightSnippet(s){
  * commentId — необязательный ?c= параметр: к этому комментарию прокрутиться.
  * from — контекст возврата: 'start' | 'shelf' | 'results'.
  */
-function openReader(messageId, commentId, from){
+function openReader(messageId, commentId, from, chatId){
   // Запоминаем контекст возврата
   const view = document.querySelector('.view.active');
   const scroll = view ? view.scrollTop : 0;
@@ -1207,8 +1451,11 @@ function openReader(messageId, commentId, from){
   if (location.hash !== hash){
     nav(hash);
   }
-  // Загружаем сообщение
-  wsSend({op: 'get_message', archive_id: S.archive.id, args: {message_id: messageId}});
+  // Загружаем сообщение. BUG-004 (П8): передаём chat_id из hit поиска,
+  // если он есть — это страхует от случая, когда в паспорте нет chat_id.
+  const args = {message_id: messageId};
+  if (chatId) args.chat_id = chatId;
+  wsSend({op: 'get_message', archive_id: S.archive.id, args: args});
   // Лоадер
   $('rd-title').textContent = 'Загружаю…';
   $('rd-author').textContent = '—';
@@ -1440,6 +1687,281 @@ function toast(msg){
   t.classList.add('show');
   clearTimeout(t._h);
   t._h = setTimeout(()=> t.classList.remove('show'), 2600);
+}
+
+/* ============ FOLDER PICKER (из транскрайбера) ============ */
+const fpState = { target: null, current: '', dirs: [], roots: [], rootsLoaded: false };
+
+function fpParentOf(p) {
+    if (!p) return '';
+    const s = String(p).replace(/[\/]+$/, '');
+    const idx = Math.max(s.lastIndexOf('\\'), s.lastIndexOf('/'));
+    if (idx <= 0) {
+        // На Windows 'C:\' -> parent пустой (это корень диска)
+        if (/^[A-Za-z]:\\?$/.test(s)) return '';
+        return '';
+    }
+    let parent = s.substring(0, idx).replace(/[\/]+$/, '');
+    if (/^[A-Za-z]:$/.test(parent)) parent += '\\';
+    return parent;
+}
+
+async function fpLoad(path) {
+    try {
+        const r = await fetch('/api/browse?path=' + encodeURIComponent(path || ''));
+        const d = await r.json();
+        if (d.error) { toast('Папки не загрузились: ' + d.error); return; }
+        fpState.current = d.path || '';
+        fpState.dirs = Array.isArray(d.dirs) ? d.dirs : [];
+        fpState.files = Array.isArray(d.files) ? d.files : [];
+        fpRender();
+    } catch (e) {
+        toast('Папки не загрузились: ' + e);
+    }
+}
+
+function _humanSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+    return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
+function fpRender() {
+    const pathEl = $('fp-path');
+    const listEl = $('fp-list');
+    if (pathEl) pathEl.textContent = fpState.current || '/';
+    if (!listEl) return;
+    const dirs = fpState.dirs || [];
+    const files = fpState.files || [];
+    if (!dirs.length && !files.length) {
+        listEl.innerHTML = '<div class="folder-empty"><i class="fas fa-folder"></i>Папка пуста</div>';
+    } else {
+        let html = '';
+        if (dirs.length) {
+            html += '<div class="folder-section">Папки</div>';
+            html += dirs.map(function(p) {
+                const parts = p.split(/[\\/]/);
+                const name = parts[parts.length - 1] || p;
+                const safe = p.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+                const safeName = name.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                return '<div class="folder-item" data-path="' + safe + '"><i class="fas fa-folder"></i><span>' + safeName + '</span></div>';
+            }).join('');
+        }
+        if (files.length) {
+            html += '<div class="folder-section">Файлы</div>';
+            html += files.map(function(f) {
+                const safeName = (f.name || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                const icon = /\.(db|sqlite|sqlite3)$/i.test(f.name) ? 'fa-database'
+                           : /\.(md|txt|markdown)$/i.test(f.name) ? 'fa-file-lines'
+                           : /\.(json)$/i.test(f.name) ? 'fa-file-code'
+                           : 'fa-file';
+                return '<div class="folder-file"><i class="fas ' + icon + '"></i><span>' + safeName + '</span><span class="folder-file-size">' + _humanSize(f.size || 0) + '</span></div>';
+            }).join('');
+        }
+        listEl.innerHTML = html;
+    }
+    const upBtn = $('fp-up');
+    if (upBtn) {
+        const parent = fpParentOf(fpState.current);
+        const atRoot = !parent || parent === String(fpState.current).replace(/[\/]+$/, '');
+        upBtn.classList.toggle('disabled', atRoot);
+    }
+    fpRenderDrives();
+}
+
+function openFolderPicker(target) {
+    /* target: 'add_archive' — единственный сценарий в Librarian.
+       В транскрайбере был 'input'/'output', но нам сейчас не нужно.
+       Оставляем сигнатуру для будущих расширений. */
+    fpState.target = target;
+    $('fp-overlay').classList.add('show');
+    $('folder-modal').classList.add('show');
+    if (!fpState.rootsLoaded) fpLoadRoots();
+    fpLoad('');
+}
+
+function closeFolderPicker() {
+    $('fp-overlay').classList.remove('show');
+    $('folder-modal').classList.remove('show');
+}
+
+function fpOk() {
+    if (!fpState.target) return;
+    if (!fpState.current) { closeFolderPicker(); return; }
+    if (fpState.target === 'add_archive') {
+        /* Заполнить поле пути в модалке «Добавить архив» и запустить detect */
+        const pathEl = $('add-path');
+        if (pathEl) {
+            pathEl.value = fpState.current;
+            addArchiveDetect(fpState.current);
+        }
+        closeFolderPicker();
+        return;
+    }
+    /* Для других target — пока просто тост (как было до патча 3) */
+    toast('Выбрано: ' + fpState.current);
+    closeFolderPicker();
+}
+
+function fpUp() {
+    const parent = fpParentOf(fpState.current);
+    if (!parent || parent === String(fpState.current).replace(/[\/]+$/, '')) return;
+    fpLoad(parent);
+}
+
+$('fp-list').addEventListener('click', function(e) {
+    const item = e.target.closest('.folder-item');
+    if (!item) return;
+    fpLoad(item.dataset.path);
+});
+$('fp-up').addEventListener('click', fpUp);
+$('fp-cancel').addEventListener('click', closeFolderPicker);
+$('fp-ok').addEventListener('click', fpOk);
+$('fp-overlay').addEventListener('click', closeFolderPicker);
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && $('fp-overlay').classList.contains('show')) closeFolderPicker();
+});
+
+async function fpLoadRoots() {
+    if (fpState.rootsLoaded) return;
+    try {
+        const r = await fetch('/api/drives');
+        const d = await r.json();
+        fpState.roots = Array.isArray(d.roots) ? d.roots : [];
+        fpState.rootsLoaded = true;
+        fpRenderDrives();
+    } catch (e) { /* молча — чипы просто не покажутся */ }
+}
+
+function fpDriveLabel(root) {
+    const m = String(root).match(/^([A-Za-z]:)[\\/]?$/);
+    if (m) return m[1];
+    if (root === '/') return '/';
+    const parts = String(root).replace(/[\\/]+$/, '').split(/[\\/]/);
+    return parts[parts.length - 1] || root;
+}
+
+function fpIsCurrentRoot(root) {
+    const c = String(fpState.current || '');
+    if (!c) return false;
+    const cn = c.replace(/[\\/]+$/, '');
+    const rn = String(root).replace(/[\\/]+$/, '');
+    if (cn === rn) return true;
+    return cn.length > rn.length && (cn.startsWith(rn + '\\') || cn.toLowerCase().startsWith(rn.toLowerCase() + '/'));
+}
+
+function fpRenderDrives() {
+    const box = $('fp-drives');
+    if (!box) return;
+    if (!fpState.roots || fpState.roots.length <= 1) {
+        box.style.display = 'none';
+        box.innerHTML = '';
+        return;
+    }
+    box.style.display = 'flex';
+    box.innerHTML = fpState.roots.map(function(r) {
+        const safe = String(r).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        const label = fpDriveLabel(r).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const active = fpIsCurrentRoot(r) ? ' active' : '';
+        return '<div class="fp-drive' + active + '" data-root="' + safe + '" title="' + safe + '"><i class="fas fa-hdd"></i> ' + label + '</div>';
+    }).join('');
+}
+
+$('fp-drives').addEventListener('click', function(e) {
+    const chip = e.target.closest('.fp-drive');
+    if (!chip) return;
+    fpLoad(chip.dataset.root);
+});
+
+/* ============ ADD-ARCHIVE (модалка + picker) ============ */
+async function addArchivePick() {
+    /* Открывает folder picker; fpOk для target='add_archive'
+       заполнит #add-path и триггернет detect. */
+    openFolderPicker('add_archive');
+}
+
+async function addArchiveDetect(path) {
+    /* Preview-запрос /api/archives/detect — показывает чип source_type
+       (или ошибку) под полем пути. Активирует кнопку «Добавить». */
+    const box = $('add-detect');
+    const submit = $('add-submit');
+    if (!path) {
+        box.innerHTML = '';
+        submit.disabled = true;
+        return;
+    }
+    box.innerHTML = '<span style="font-size:0.76rem;color:var(--text-sec);">Проверяю…</span>';
+    submit.disabled = true;
+    try {
+        const r = await fetch('/api/archives/detect', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({path: path}),
+        });
+        const d = await r.json();
+        if (d.ok) {
+            const cls = d.source_type === 'text_folder' ? ' text' : '';
+            const icon = d.source_type === 'text_folder' ? 'fa-book-open' : 'fa-comments';
+            const label = d.source_type === 'text_folder' ? 'Текстовая папка' : 'Telegram-архив';
+            box.innerHTML =
+                '<span class="add-detect-chip' + cls + '"><i class="fas ' + icon + '"></i> ' + label + '</span>' +
+                '<span class="add-detect-hint">' + (d.hint || '') + '</span>';
+            submit.disabled = false;
+        } else {
+            box.innerHTML = '<span class="add-detect-error"><i class="fas fa-circle-exclamation"></i> ' + (d.error || 'Не похоже на архив') + '</span>';
+            submit.disabled = true;
+        }
+    } catch (e) {
+        box.innerHTML = '<span class="add-detect-error"><i class="fas fa-circle-exclamation"></i> ' + e + '</span>';
+        submit.disabled = true;
+    }
+}
+
+async function addArchiveSubmit() {
+    const path = $('add-path').value.trim();
+    if (!path) { toast('Сначала выберите папку'); return; }
+    const id = $('add-id').value.trim();
+    const submit = $('add-submit');
+    submit.disabled = true;
+    submit.textContent = 'Добавляю…';
+    try {
+        const r = await fetch('/api/archives/add', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({path: path, id: id || undefined}),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            toast('Не удалось добавить: ' + (d.error || r.status));
+            submit.disabled = false;
+            submit.textContent = 'Добавить';
+            return;
+        }
+        toast('Архив добавлен: ' + d.archive_id);
+        modalClose();
+        addArchiveReset();
+        /* Перерисовать список архивов на экране 1:
+           WS list_archives обновит S.archives и вызовет renderHome. */
+        if (typeof wsSend === 'function' && S.ws && S.ws.readyState === WebSocket.OPEN) {
+            wsSend({op: 'list_archives'});
+        } else {
+            /* Fallback: перезагрузить страницу */
+            location.reload();
+        }
+    } catch (e) {
+        toast('Ошибка: ' + e);
+        submit.disabled = false;
+        submit.textContent = 'Добавить';
+    }
+}
+
+function addArchiveReset() {
+    $('add-path').value = '';
+    $('add-id').value = '';
+    $('add-detect').innerHTML = '';
+    $('add-submit').disabled = true;
+    $('add-submit').textContent = 'Добавить';
 }
 </script>
 </body>

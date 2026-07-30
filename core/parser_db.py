@@ -299,6 +299,78 @@ class ParserDB:
             r = cur.fetchone()
             return (r[0], r[1]) if r else (None, None)
 
+    def inspect_schema(self) -> dict:
+        """
+        Диагностическая выгрузка схемы БД — для случая, когда стандартные
+        запросы возвращают 0 (например, таблица называется не 'messages').
+
+        Возвращает:
+            {
+              "user_version": int,
+              "tables": [{"name": str, "row_count": int}, ...],
+              "messages_columns": [str, ...] | null,
+              "messages_exists": bool,
+              "alternative_message_tables": [str, ...],
+            }
+        Все запросы обёрнуты в try/except — диагностика не должна ронять
+        открытие архива. Если таблицу нельзя прочитать — row_count=-1.
+        """
+        out = {
+            "user_version": 0,
+            "tables": [],
+            "messages_columns": None,
+            "messages_exists": False,
+            "alternative_message_tables": [],
+        }
+        try:
+            with self.cursor() as cur:
+                cur.execute("PRAGMA user_version")
+                r = cur.fetchone()
+                out["user_version"] = int(r[0] if r else 0)
+        except Exception:
+            pass
+        try:
+            with self.cursor() as cur:
+                cur.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                )
+                names = [r[0] for r in cur.fetchall()]
+        except Exception:
+            names = []
+        # Для каждой таблицы — попробуем посчитать строки
+        for name in names:
+            row_count = -1
+            try:
+                with self.cursor() as cur:
+                    cur.execute(f'SELECT COUNT(*) FROM "{name}"')
+                    r = cur.fetchone()
+                    row_count = int(r[0] if r else 0)
+            except Exception:
+                pass
+            out["tables"].append({"name": name, "row_count": row_count})
+        # Колонки messages (если есть)
+        if "messages" in names:
+            out["messages_exists"] = True
+            try:
+                with self.cursor() as cur:
+                    cur.execute("PRAGMA table_info(messages)")
+                    out["messages_columns"] = [
+                        {"name": r[1], "type": r[2], "notnull": bool(r[3])}
+                        for r in cur.fetchall()
+                    ]
+            except Exception:
+                pass
+        else:
+            # Поиск похожих таблиц — вдруг называется с префиксом
+            candidates = []
+            for n in names:
+                ln = n.lower()
+                if "message" in ln or "msg" in ln or "post" in ln:
+                    candidates.append(n)
+            out["alternative_message_tables"] = candidates
+        return out
+
     def top_authors(self, limit: int = 20) -> list[tuple[str, int]]:
         """Топ авторов по числу сообщений. Только арифметика."""
         with self.cursor() as cur:
@@ -321,6 +393,57 @@ class ParserDB:
                 f"SELECT {cols} FROM messages WHERE date > ? "
                 f"ORDER BY date ASC LIMIT ?",
                 (since_iso, limit),
+            )
+            return [self._row_to_message(r) for r in cur.fetchall()]
+
+    def latest_messages(self, limit: int = 50) -> list[MessageRow]:
+        """Последние limit сообщений (от новых к старым).
+
+        Фикс бага в whats_new(since=None): раньше использовался
+        messages_after("0000-00-00T00:00:00", limit) с ORDER BY date ASC —
+        это давало limit САМЫХ СТАРЫХ сообщений, потом reversed() — старые
+        в обратном порядке. Не последние!
+
+        Новый метод берёт ORDER BY date DESC LIMIT — сразу последние.
+        """
+        cols = self._message_cols()
+        with self.cursor() as cur:
+            cur.execute(
+                f"SELECT {cols} FROM messages "
+                f"ORDER BY date DESC LIMIT ?",
+                (limit,),
+            )
+            return [self._row_to_message(r) for r in cur.fetchall()]
+
+    def latest_transcriptions(self, limit: int = 50) -> list[MessageRow]:
+        """Последние limit сообщений, у которых есть транскрипция.
+
+        Используется для полки «Записи» (voice-сообщения с расшифровкой).
+        Если transcriptions нет — возвращает пустой список.
+        Если транскрипции в .md-файлах (не в БД) — fallback на обычные
+        последние сообщения; UI всё равно покажет «Записи», но это будут
+        последние сообщения (без фильтра по голосовым).
+        """
+        cols = self._message_cols()
+        with self.cursor() as cur:
+            # Проверяем, есть ли таблица transcriptions
+            cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name='transcriptions'"
+            )
+            if cur.fetchone() is None:
+                return []
+            # Берём сообщения, у которых есть транскрипция (по message_id).
+            # chat_id в transcriptions называется peer_id — это тот же chat_id.
+            cur.execute(
+                f"SELECT {cols} FROM messages m "
+                f"WHERE EXISTS ("
+                f"  SELECT 1 FROM transcriptions t "
+                f"  WHERE t.message_id = m.message_id "
+                f"    AND t.peer_id = m.chat_id"
+                f") "
+                f"ORDER BY m.date DESC LIMIT ?",
+                (limit,),
             )
             return [self._row_to_message(r) for r in cur.fetchall()]
 

@@ -40,7 +40,22 @@ from typing import Optional
 
 
 PASSPORT_FILENAME = "archive_passport.json"
+# Каноническое имя БД парсера.
 PARSER_DB_FILENAME = "parser.db"
+# Альтернативные имена, которые тоже признаются как БД парсера.
+# Реальные архивы от Rozitta Parser создают telegram_archive.db, демо-архивы
+# в этом проекте создают parser.db. При поиске и детекте оба имени валидны.
+PARSER_DB_ALIASES = ("parser.db", "telegram_archive.db")
+
+
+def _find_parser_db(folder: Path) -> Path | None:
+    """Вернуть путь к БД парсера в folder, если он есть (любое из алиасов).
+    Возвращает первый найденный. Если нет ни одного — None."""
+    for name in PARSER_DB_ALIASES:
+        p = folder / name
+        if p.exists():
+            return p
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -213,36 +228,113 @@ class Archive:
 # ---------------------------------------------------------------------------
 
 class ArchiveDiscovery:
-    """Поиск архивов в корневой папке (обычно output/)."""
+    """
+    Поиск архивов по списку папок.
+
+    Два режима:
+    1) ArchiveDiscovery(root) — старый API, для тестов: одна корневая папка,
+       рекурсивный поиск parser.db внутри (как раньше).
+    2) ArchiveDiscovery.from_paths([path1, path2, ...]) — новый API: каждая
+       папка-аргумент сама является архивом (содержит parser.db + паспорт).
+       Это режим для реестра — никаких rglob, пользователь явно указал
+       каждую папку.
+
+    Недоступные папки (нет диска, нет прав) пропускаются молча.
+    """
 
     def __init__(self, root: Path | str):
         self.root = Path(root)
+        self._paths: list[Path] | None = None  # None = legacy-режим
+        # _entries: список (id, path) — режим реестра с явными id.
+        # Если задан — используется вместо _paths. Это чинит несоответствие
+        # id между реестром (slug) и discovery (p.name): discovery берёт id
+        # из entry, а не из имени папки.
+        self._entries: list[tuple[str, Path]] | None = None
+
+    @classmethod
+    def from_paths(cls, paths: list[Path | str]) -> "ArchiveDiscovery":
+        """Создать discovery по списку путей к архивам (режим реестра).
+
+        Deprecated: prefer from_entries() — он берёт id из реестра,
+        а не из имени папки, что чинит несоответствие id для архивов
+        с кириллическими именами. from_paths оставлен для совместимости
+        со старыми тестами.
+        """
+        d = cls.__new__(cls)
+        d.root = Path("/")  # не используется, но поле нужно
+        d._paths = [Path(p) for p in paths]
+        d._entries = None
+        return d
+
+    @classmethod
+    def from_entries(cls, entries: list) -> "ArchiveDiscovery":
+        """
+        Создать discovery по списку RegistryEntry (или любых объектов
+        с полями .id и .path).
+
+        В отличие от from_paths, этот метод сохраняет id из реестра —
+        это гарантирует, что Archive.id совпадает с RegistryEntry.id,
+        и registry.remove(archive_id) сработает.
+
+        :param entries: list[RegistryEntry] (или list[dict] с keys id/path)
+        """
+        d = cls.__new__(cls)
+        d.root = Path("/")
+        d._paths = None
+        d._entries = []
+        for e in entries:
+            # Поддерживаем и RegistryEntry (dataclass), и dict
+            if hasattr(e, "id") and hasattr(e, "path"):
+                eid, epath = str(e.id), Path(e.path)
+            elif isinstance(e, dict):
+                eid, epath = str(e["id"]), Path(e["path"])
+            else:
+                continue
+            d._entries.append((eid, epath))
+        return d
 
     def list_archives(self) -> list[Archive]:
         """
-        Рекурсивно ищет пары (archive_passport.json, parser.db).
-        Возвращает список без дублей (если паспорт найден на двух уровнях —
-        приоритет у более глубокой папки, где лежит parser.db).
+        Возвращает список архивов.
+
+        Legacy-режим (root задан): рекурсивный rglob по parser.db.
+        Реестр-режим (_entries задан): открываем каждую папку с явным id.
+        Реестр-режим (_paths задан, deprecated): каждая папка открывается напрямую,
+            id = имя папки (НЕ совпадает с реестром для кириллических имён).
         """
+        if self._entries is not None:
+            return self._list_from_entries()
+        if self._paths is not None:
+            return self._list_from_paths()
+        return self._list_from_root()
+
+    # ------------------------------------------------------------------
+    # Legacy: одна корневая папка (тесты)
+    # ------------------------------------------------------------------
+
+    def _list_from_root(self) -> list[Archive]:
         if not self.root.exists():
             return []
 
         found: dict[str, Archive] = {}
 
-        # Сначала ищем все parser.db — это маркер архива.
-        for db_path in self.root.rglob(PARSER_DB_FILENAME):
-            archive_root = db_path.parent
-            archive_id = archive_root.name
-            if archive_id in found:
-                continue
-            passport = self._read_passport(archive_root, archive_id)
-            found[archive_id] = Archive(
-                id=archive_id,
-                root=archive_root,
-                passport=passport,
-                parser_db_path=db_path,
-                has_librarian_db=(archive_root / "librarian.db").exists(),
-            )
+        # Сначала ищем все БД парсера — это маркер архива. Ищем по всем
+        # алиасам (parser.db, telegram_archive.db), чтобы поддержать и демо-
+        # архивы, и реальные архивы от Rozitta Parser.
+        for db_filename in PARSER_DB_ALIASES:
+            for db_path in self.root.rglob(db_filename):
+                archive_root = db_path.parent
+                archive_id = archive_root.name
+                if archive_id in found:
+                    continue
+                passport = self._read_passport(archive_root, archive_id)
+                found[archive_id] = Archive(
+                    id=archive_id,
+                    root=archive_root,
+                    passport=passport,
+                    parser_db_path=db_path,
+                    has_librarian_db=(archive_root / "librarian.db").exists(),
+                )
 
         # Если parser.db нет, но паспорт есть — показываем как «битый» архив,
         # чтобы пользователь видел его в UI и понимал, что Parser не закончил.
@@ -256,6 +348,78 @@ class ArchiveDiscovery:
             # Решение: пропускаем, чтобы не плодить пустые карточки.
             # (Если когда-нибудь захотим показать — раскомментировать.)
 
+        return sorted(found.values(), key=lambda a: a.passport.title.lower() or a.id)
+
+    # ------------------------------------------------------------------
+    # Новый режим: список конкретных путей (реестр)
+    # ------------------------------------------------------------------
+
+    def _list_from_paths(self) -> list[Archive]:
+        found: dict[str, Archive] = {}
+        for p in self._paths or []:
+            try:
+                if not p.exists() or not p.is_dir():
+                    continue
+                db_path = _find_parser_db(p)
+                if db_path is None:
+                    continue
+                archive_id = p.name
+                # Если два разных пути дают одинаковый id (имя папки) —
+                # добавляем суффикс _2, _3, ...
+                base_id = archive_id
+                n = 2
+                while archive_id in found:
+                    archive_id = f"{base_id}_{n}"
+                    n += 1
+                passport = self._read_passport(p, archive_id)
+                found[archive_id] = Archive(
+                    id=archive_id,
+                    root=p,
+                    passport=passport,
+                    parser_db_path=db_path,
+                    has_librarian_db=(p / "librarian.db").exists(),
+                )
+            except (OSError, PermissionError):
+                # Недоступная папка (нет диска, нет прав) — пропускаем.
+                continue
+        return sorted(found.values(), key=lambda a: a.passport.title.lower() or a.id)
+
+    # -----------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Режим реестра: список (id, path) — id из реестра, не из имени папки.
+    # Это чинит несоответствие id для архивов с кириллическими именами:
+    # _slugify("Мастер Группа") = "Мастер Группа" (после фикса registry.py),
+    # а не "archive". Discovery вернёт Archive с тем же id, что в реестре.
+    # ------------------------------------------------------------------
+
+    def _list_from_entries(self) -> list[Archive]:
+        found: dict[str, Archive] = {}
+        for entry_id, p in self._entries or []:
+            try:
+                if not p.exists() or not p.is_dir():
+                    continue
+                db_path = _find_parser_db(p)
+                if db_path is None:
+                    continue
+                archive_id = entry_id
+                # Если два разных пути дают одинаковый id (маловероятно,
+                # но теоретически возможно из старого реестра) — суффикс.
+                base_id = archive_id
+                n = 2
+                while archive_id in found:
+                    archive_id = f"{base_id}_{n}"
+                    n += 1
+                passport = self._read_passport(p, archive_id)
+                found[archive_id] = Archive(
+                    id=archive_id,
+                    root=p,
+                    passport=passport,
+                    parser_db_path=db_path,
+                    has_librarian_db=(p / "librarian.db").exists(),
+                )
+            except (OSError, PermissionError):
+                continue
         return sorted(found.values(), key=lambda a: a.passport.title.lower() or a.id)
 
     # -----------------------------------------------------------------------

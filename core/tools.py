@@ -42,6 +42,107 @@ class ToolError(Exception):
 # Tool: search
 # ---------------------------------------------------------------------------
 
+def _search_by_author(
+    archive: Archive,
+    parser_db: "ParserDB",
+    nick: str,
+    *,
+    limit: int = 20,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> dict:
+    """
+    Поиск по автору — отдельный режим, не FTS.
+
+    BUG-003 (П6): пользователь вводит '@ник' в строку поиска.
+    FTS ищет по тексту и находит только 2 сообщения (где ник упомянут).
+    Этот режим делает SELECT из messages WHERE author LIKE '%ник%' и
+    возвращает последние сообщения автора (по дате DESC).
+
+    Возвращает ту же структуру, что и search(), но:
+      - hits[].source = 'author_search' (UI может пометить «по автору»)
+      - filters.author_search = True (для отладки)
+      - count может быть > 20 (но в hits только limit)
+    """
+    from .parser_db import MessageRow  # only for typing
+    # Нормализуем ник для LIKE: убираем @, ищем без учёта регистра.
+    # Поддерживаем оба варианта хранения: с @ и без.
+    nick_clean = nick.lstrip("@").strip()
+    if not nick_clean:
+        return {"query": "@" + nick, "filters": {"author_search": True},
+                "count": 0, "hits": [], "groups": [], "groups_count": 0}
+
+    # SQL: в parser.db НЕТ колонки `author` — она вычисляется в MessageRow.author
+    # из `username` (с @) или из `user_id` (как user_<id>). Для поиска по нику
+    # используем `username`: он хранится как 'nickname' (без @), MessageRow
+    # добавляет @ на лету. Сравнение case-insensitive, проверяем оба варианта.
+    # Лимит — limit + запас на случай, если нужны и посты, и комментарии
+    # (пока отдаём просто последние по дате).
+    cols = parser_db._message_cols()
+    where = [
+        "(username = ? COLLATE NOCASE OR username = ? COLLATE NOCASE "
+        "  OR username LIKE ? COLLATE NOCASE OR username LIKE ? COLLATE NOCASE)",
+    ]
+    args: list = [
+        nick_clean, "@" + nick_clean,
+        "%" + nick_clean + "%", "%" + "@" + nick_clean + "%",
+    ]
+    if date_from is not None:
+        where.append("date >= ?")
+        args.append(date_from)
+    if date_to is not None:
+        where.append("date <= ?")
+        args.append(date_to)
+
+    sql = (
+        f"SELECT {cols} FROM messages "
+        f"WHERE " + " AND ".join(where) + " "
+        f"ORDER BY date DESC LIMIT ?"
+    )
+    args.append(limit)
+
+    with parser_db.cursor() as cur:
+        cur.execute(sql, args)
+        rows = cur.fetchall()
+
+    hits: list[dict] = []
+    for r in rows:
+        msg = parser_db._row_to_message(r)
+        text = (msg.text or "").strip()
+        snippet = text[:300] + ("…" if len(text) > 300 else "")
+        is_comment = bool(msg.is_comment)
+        hits.append({
+            "internal_id": msg.id,
+            "chat_id": msg.chat_id,
+            "message_id": msg.message_id,
+            "source": "author_search",
+            "author": msg.author,
+            "date": msg.date,
+            "snippet": snippet,
+            "is_comment": is_comment,
+            "post_message_id": msg.post_id,
+            "url": (
+                f"#/a/{archive.id}/m/{msg.post_id}?c={msg.message_id}"
+                if is_comment and msg.post_id
+                else f"#/a/{archive.id}/m/{msg.message_id}"
+            ),
+        })
+
+    return {
+        "query": "@" + nick,
+        "filters": {
+            "author_search": True,
+            "nick": nick_clean,
+            "date_from": date_from,
+            "date_to": date_to,
+        },
+        "count": len(hits),
+        "hits": hits,
+        "groups": [],
+        "groups_count": 0,
+    }
+
+
 def search(
     archive: Archive,
     lib_db: LibrarianDB,
@@ -53,6 +154,10 @@ def search(
     source: Optional[str] = None,
     limit: int = SEARCH_MAX_RESULTS,
     quota_per_kind: Optional[int] = None,
+    # Г3: групповое ранжирование
+    parser_db: Optional[ParserDB] = None,
+    include_groups: bool = False,
+    group_limit: int = 10,
 ) -> dict:
     """
     FTS5-поиск по архиву.
@@ -78,12 +183,47 @@ def search(
     На реальном архиве это критично: иначе материал автора тонет под
     комментариями. По умолчанию для UI — 5 на тип (4б: узкая выдача
     лучше широкой).
+
+    Г3 (рекомендации_группы_источников.md): если `include_groups=True` и
+    `parser_db` задан — в результат добавляются два поля:
+      - `groups`: список GroupHit.to_dict(), отсортированных по числу
+        совпавших сообщений (matched_count DESC, best_rank ASC,
+        total_count DESC). Не более `group_limit` (по умолчанию 10).
+      - `groups_count`: общее число групп с хотя бы одним совпадением
+        (до обрезки group_limit).
+    Если `include_groups=False` или `parser_db=None` — `groups=[]`,
+    `groups_count=0`. Квоты (Б2) остаются; групповое ранжирование
+    даёт порядок, а не заменяет наличие.
     """
     query = (query or "").strip()
     if not query:
         return {"query": "", "filters": {}, "count": 0, "hits": []}
 
+    # Нормализация автора: пользователь вводит "MariaMariaButterfly",
+    # а в БД author хранится как "@MariaMariaButterfly". Добавляем @,
+    # если его нет и автор не содержит пробелов (значит это ник, а не имя).
+    if author:
+        a = author.strip()
+        if a and not a.startswith("@") and " " not in a:
+            author = "@" + a
+        else:
+            author = a or None
+
     limit = max(1, min(int(limit or SEARCH_MAX_RESULTS), SEARCH_MAX_RESULTS))
+
+    # BUG-003 (П6): если запрос начинается с '@' — режим поиска по автору.
+    # FTS ищет по тексту и не находит сообщения автора (его ник в тексте
+    # его сообщений не упоминается). Для режима «по автору» делаем прямой
+    # SELECT из parser.db: WHERE author LIKE '%ник%' LIMIT N.
+    # Каждый результат помечается source='author_search', чтобы UI отличал.
+    if query.startswith("@") and parser_db is not None:
+        nick = query[1:].strip().lstrip("@").strip()
+        if nick:
+            return _search_by_author(
+                archive, parser_db, nick,
+                limit=limit, date_from=date_from, date_to=date_to,
+            )
+
     hits = lib_db.search(
         query,
         limit=limit,
@@ -95,6 +235,24 @@ def search(
         quota_per_kind=quota_per_kind,
     )
 
+    # Г3: групповое ранжирование. Обратно-совместимо: если include_groups
+    # выключен или parser_db не задан — отдаём пустые поля.
+    groups_payload: list[dict] = []
+    groups_count = 0
+    if include_groups and parser_db is not None:
+        try:
+            from .groups import GroupsBuilder, rank_groups
+            builder = GroupsBuilder(archive, parser_db)
+            all_groups = builder.build_all()
+            group_hits = rank_groups(hits, all_groups)
+            groups_count = len(group_hits)
+            groups_payload = [gh.to_dict() for gh in group_hits[:group_limit]]
+        except Exception:
+            # Группы — дополнение, не критика. Если упало — отдаём пустые,
+            # основной поиск не страдает.
+            groups_payload = []
+            groups_count = 0
+
     return {
         "query": query,
         "filters": {
@@ -103,6 +261,7 @@ def search(
             "date_to": date_to,
             "source": source,
             "quota_per_kind": quota_per_kind,
+            "include_groups": include_groups,
         },
         "count": len(hits),
         "hits": [
@@ -129,6 +288,8 @@ def search(
             }
             for h in hits
         ],
+        "groups": groups_payload,
+        "groups_count": groups_count,
     }
 
 
@@ -259,17 +420,29 @@ def get_message(
     # Если chat_id не передан — пробуем из паспорта
     if chat_id is None:
         chat_id = archive.passport.chat_id
-    if chat_id is None:
-        raise ToolError(
-            f"Не удалось определить chat_id для message_id={message_id}. "
-            "В паспорте архива chat_id отсутствует."
-        )
 
-    msg = parser_db.get_message_by_message_id(int(chat_id), int(message_id))
-    if msg is None:
-        raise ToolError(
-            f"Сообщение не найдено: chat_id={chat_id}, message_id={message_id}."
-        )
+    # BUG-004 (П8): если в паспорте chat_id отсутствует (частый случай для
+    # реальных архивов МГ) — ищем сообщение только по message_id.
+    # parser_db.get_message_by_message_id_only() уже существует для этого.
+    # Если найдено — берём его реальный chat_id и продолжаем как обычно.
+    # Это чинит «не удалось определить chat_id» при клике на результат поиска
+    # на реальном архиве, когда URL ридера = #/a/{id}/m/{message_id} (без chat_id).
+    if chat_id is None:
+        fallback_msg = parser_db.get_message_by_message_id_only(int(message_id))
+        if fallback_msg is None:
+            raise ToolError(
+                f"Сообщение не найдено по message_id={message_id}. "
+                "chat_id в паспорте отсутствует, поиск по message_id во всех чатах "
+                "ничего не дал. Возможно, архив построен некорректно."
+            )
+        chat_id = fallback_msg.chat_id
+        msg = fallback_msg
+    else:
+        msg = parser_db.get_message_by_message_id(int(chat_id), int(message_id))
+        if msg is None:
+            raise ToolError(
+                f"Сообщение не найдено: chat_id={chat_id}, message_id={message_id}."
+            )
 
     # Транскрипция (если голосовое)
     transcription = None
@@ -420,24 +593,38 @@ def whats_new(
     *,
     since: Optional[str] = None,
     limit: int = WHATS_NEW_DEFAULT_LIMIT,
+    shelf: Optional[str] = None,
 ) -> dict:
     """
     Сообщения, появившиеся после отметки since (ISO-строка).
-    Если since=None — последние limit сообщений (по дате).
+    Если since=None — последние limit сообщений (по дате, от новых к старым).
+
+    shelf (опционально): 'messages' (по умолчанию) или 'records'.
+      - 'messages' — все последние сообщения.
+      - 'records' — только голосовые сообщения с транскрипцией
+        (использует latest_transcriptions; если транскрипций нет — пусто).
+
+    ФИКС: раньше при since=None вызывался messages_after("0000-00-00T00:00:00")
+    с ORDER BY date ASC — это давало limit САМЫХ СТАРЫХ, потом reversed() —
+    старые в обратном порядке. Сейчас используется latest_messages() с
+    ORDER BY date DESC — действительно последние.
     """
     limit = max(1, min(int(limit or WHATS_NEW_DEFAULT_LIMIT), WHATS_NEW_MAX_LIMIT))
 
     if since:
         msgs = parser_db.messages_after(since, limit=limit)
+    elif shelf == "records":
+        # Полка «Записи» — только сообщения с транскрипцией.
+        # Если в БД нет transcriptions — вернётся пустой список (UI покажет
+        # «На этой полке ничего нет»).
+        msgs = parser_db.latest_transcriptions(limit=limit)
     else:
-        # Если since не задан — берём последние limit сообщений по дате.
-        # Это не самый эффективный путь, но для архива разумного размера ок.
-        # Используем тот же метод, но с минимальной датой.
-        msgs = parser_db.messages_after("0000-00-00T00:00:00", limit=limit)
-        msgs = list(reversed(msgs))  # от новых к старым
+        # Полка «Сообщения» (или без указания полки) — последние сообщения.
+        msgs = parser_db.latest_messages(limit=limit)
 
     return {
         "since": since,
+        "shelf": shelf,
         "count": len(msgs),
         "items": [
             {
