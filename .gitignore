@@ -11,3 +11,7 @@ eval_index.db
 
 # Реестр подключённых архивов (пути пользователя)
 config/
+
+
+#Ignore vscode AI rules
+.github\instructions\codacy.instructions.md
